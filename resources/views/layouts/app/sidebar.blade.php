@@ -14,25 +14,87 @@
         </flux:sidebar.header>
 
         <flux:sidebar.nav>
-            <flux:sidebar.group :heading="__('Platform')" class="grid">
-                <flux:sidebar.item icon="home" :href="route('dashboard')" :current="request()->routeIs('dashboard')"
-                    wire:navigate>
+
+            {{-- Removed old Platform Dashboard group --}}
+            {{-- <flux:sidebar.group :heading="__('Platform')" class="grid">
+                <flux:sidebar.item :href="route('dashboard')" :current="request()->routeIs('dashboard')" wire:navigate>
                     {{ __('Dashboard') }}
                 </flux:sidebar.item>
-            </flux:sidebar.group>
+            </flux:sidebar.group> --}}
 
-            <flux:sidebar.group heading="Email Manager" class="grid">
-                <flux:sidebar.item icon="layout-grid" :href="route('email-manager.categories')"
-                    :current="request()->routeIs('email-manager.categories*')" wire:navigate>
+            <flux:sidebar.group class="grid">
+
+                {{-- New Email Manager Dashboard --}}
+                <flux:sidebar.item
+                    :href="route('email-manager.dashboard')"
+                    :current="request()->routeIs('email-manager.dashboard')"
+                    wire:navigate
+                >
+                    Dashboard
+                </flux:sidebar.item>
+
+                <flux:sidebar.item
+                    :href="route('email-manager.categories')"
+                    :current="request()->routeIs('email-manager.categories*')"
+                    wire:navigate
+                >
                     Categories
                 </flux:sidebar.item>
+
+                <flux:sidebar.item
+                    :href="route('email-manager.imports.upload')"
+                    :current="request()->routeIs('email-manager.imports.upload')"
+                    wire:navigate
+                >
+                    Upload
+                </flux:sidebar.item>
+
+                <flux:sidebar.item
+                    :href="route('email-manager.imports.batches')"
+                    :current="request()->routeIs('email-manager.imports.batches*')"
+                    wire:navigate
+                >
+                    Imports
+                </flux:sidebar.item>
+
+                <flux:sidebar.item
+                    :href="route('email-manager.suppressions')"
+                    :current="request()->routeIs('email-manager.suppressions')"
+                    wire:navigate
+                >
+                    Suppressions
+                </flux:sidebar.item>
+
+                <flux:sidebar.item
+                    :href="route('email-manager.domain-unsubscribes')"
+                    :current="request()->routeIs('email-manager.domain-unsubscribes')"
+                    wire:navigate
+                >
+                    Domain Unsubscribes
+                </flux:sidebar.item>
+
+                <flux:sidebar.item
+                    :href="route('email-manager.emails')"
+                    :current="request()->routeIs('email-manager.emails')"
+                    wire:navigate
+                >
+                    Emails
+                </flux:sidebar.item>
+
+                <flux:sidebar.item
+                    :href="route('email-manager.exports')"
+                    :current="request()->routeIs('email-manager.exports*')"
+                    wire:navigate
+                >
+                    Exports
+                </flux:sidebar.item>
+
             </flux:sidebar.group>
         </flux:sidebar.nav>
 
         <flux:spacer />
 
         <flux:sidebar.nav>
-
         </flux:sidebar.nav>
 
         <x-desktop-user-menu class="hidden lg:block" :name="auth()->user()->name" />
