@@ -2,7 +2,8 @@
 
 use Illuminate\Support\Facades\Route;
 
-Route::redirect('/', '/dashboard');
+// keep name "home" because auth layout uses it
+Route::get('/', fn() => redirect()->route('dashboard'))->name('home');
 
 Route::view('dashboard', 'dashboard')
     ->middleware(['auth', 'verified'])
