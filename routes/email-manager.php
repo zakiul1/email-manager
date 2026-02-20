@@ -11,8 +11,7 @@ use App\Livewire\EmailManager\Categories\Create as CategoriesCreate;
 use App\Livewire\EmailManager\Categories\Edit as CategoriesEdit;
 
 use App\Livewire\EmailManager\Imports\Upload;
-use App\Livewire\EmailManager\Imports\Batches;
-use App\Livewire\EmailManager\Imports\BatchShow;
+
 
 use App\Livewire\EmailManager\Suppression\GlobalList;
 use App\Livewire\EmailManager\Suppression\DomainList;
@@ -50,11 +49,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::get('email-manager/imports/upload', Upload::class)
         ->name('email-manager.imports.upload');
 
-    Route::get('email-manager/imports/batches', Batches::class)
-        ->name('email-manager.imports.batches');
 
-    Route::get('email-manager/imports/batches/{batch}', BatchShow::class)
-        ->name('email-manager.imports.batches.show');
 
 
     // -------------------------

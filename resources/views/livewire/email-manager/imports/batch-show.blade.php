@@ -1,4 +1,10 @@
 <div class="p-6">
+    @if (session('status'))
+        <div class="mb-4 rounded-md border border-green-200 bg-green-50 p-3 text-sm text-green-700">
+            {{ session('status') }}
+        </div>
+    @endif
+
     <div class="flex items-start justify-between gap-4">
         <div>
             <h1 class="text-lg font-semibold">Import #{{ $batch->id }}</h1>
@@ -8,14 +14,22 @@
                 Status: <span class="font-medium">{{ $batch->status }}</span>
             </div>
 
-            @if($batch->error_message)
+            @if ($batch->error_message)
                 <div class="mt-2 text-sm text-red-600">
                     Error: {{ $batch->error_message }}
                 </div>
             @endif
         </div>
 
-        <flux:button :href="route('email-manager.imports.batches')" wire:navigate>Back</flux:button>
+        <div class="flex items-center gap-2">
+            @if (in_array($batch->status, ['queued', 'processing']))
+                <flux:button size="sm" variant="ghost" :href="route('queue.run-once')">
+                    Process Now
+                </flux:button>
+            @endif
+
+            <flux:button :href="route('email-manager.imports.batches')" wire:navigate>Back</flux:button>
+        </div>
     </div>
 
     <div class="mt-6 grid grid-cols-2 md:grid-cols-5 gap-3">
