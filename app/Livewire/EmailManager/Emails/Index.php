@@ -14,8 +14,19 @@ class Index extends Component
 {
     use WithPagination;
 
+    // ✅ Make filters work via URL query string (category-wise view)
+    protected array $queryString = [
+        'category_id' => ['except' => 0],
+        'q' => ['except' => ''],
+        'domain' => ['except' => ''],
+        'valid' => ['except' => 'all'],
+        'suppressed' => ['except' => 'all'],
+        'added_from' => ['except' => ''],
+        'added_to' => ['except' => ''],
+    ];
+
     // Filters
-    public int $category_id = 0;            // required for category-based actions; optional filter
+    public int $category_id = 0;            // optional filter
     public string $q = '';                  // search email
     public string $domain = '';             // filter domain
     public string $valid = 'all';           // all|valid|invalid
@@ -37,7 +48,7 @@ class Index extends Component
 
     public function updating($name): void
     {
-        if (in_array($name, ['category_id','q','domain','valid','suppressed','added_from','added_to'], true)) {
+        if (in_array($name, ['category_id', 'q', 'domain', 'valid', 'suppressed', 'added_from', 'added_to'], true)) {
             $this->resetPage();
             $this->resetSelection();
         }
@@ -58,17 +69,28 @@ class Index extends Component
             return;
         }
 
-        $this->selected = $this->queryEmails()->limit(200)->pluck('email_addresses.id')->toArray();
+        $this->selected = $this->queryEmails()
+            ->limit(200)
+            ->pluck('email_addresses.id')
+            ->toArray();
     }
 
     private function queryEmails()
     {
+        // ✅ is_suppressed computed once in SQL (fix N+1)
+        $suppressionSub = SuppressionEntry::query()
+            ->selectRaw('1')
+            ->where('scope', 'global')
+            ->whereColumn('suppression_entries.email_address_id', 'email_addresses.id')
+            ->limit(1);
+
         // base: emails joined to pivot to enable category filtering + date range
         $query = EmailAddress::query()
             ->select('email_addresses.*')
+            ->selectSub($suppressionSub, 'is_suppressed')
             ->when($this->category_id > 0, function ($q) {
                 $q->join('category_email', 'category_email.email_address_id', '=', 'email_addresses.id')
-                  ->where('category_email.category_id', $this->category_id);
+                    ->where('category_email.category_id', $this->category_id);
             });
 
         if ($this->q !== '') {
@@ -118,6 +140,56 @@ class Index extends Component
         return $query->orderBy('email_addresses.id', 'desc');
     }
 
+    // ---------- Row Actions (used by emails table) ----------
+    public function rowCopyToCategory(int $emailId): void
+    {
+        if ($this->target_category_id <= 0) {
+            $this->dispatch('toast', type: 'error', message: 'Select a target category first.');
+            return;
+        }
+
+        $this->bulkCopyToCategory([$emailId]);
+        $this->dispatch('toast', type: 'success', message: 'Copied to target category.');
+        $this->resetPage();
+    }
+
+    public function rowSuppress(int $emailId): void
+    {
+        SuppressionEntry::firstOrCreate(
+            ['scope' => 'global', 'email_address_id' => $emailId],
+            ['reason' => 'Row action', 'user_id' => auth()->id()]
+        );
+
+        $this->dispatch('toast', type: 'success', message: 'Email suppressed.');
+        $this->resetPage();
+    }
+
+    public function rowUnsuppress(int $emailId): void
+    {
+        SuppressionEntry::where('scope', 'global')
+            ->where('email_address_id', $emailId)
+            ->delete();
+
+        $this->dispatch('toast', type: 'success', message: 'Suppression removed.');
+        $this->resetPage();
+    }
+
+    public function rowDetach(int $emailId): void
+    {
+        if ($this->category_id <= 0) {
+            $this->dispatch('toast', type: 'error', message: 'Select a category first to detach.');
+            return;
+        }
+
+        DB::table('category_email')
+            ->where('category_id', $this->category_id)
+            ->where('email_address_id', $emailId)
+            ->delete();
+
+        $this->dispatch('toast', type: 'success', message: 'Email detached from category.');
+        $this->resetPage();
+    }
+
     // ---------- Saved Filters ----------
     public function saveFilter(): void
     {
@@ -133,17 +205,23 @@ class Index extends Component
         ]);
 
         $this->save_filter_name = '';
+
+        $this->dispatch('toast', type: 'success', message: 'Filter saved.');
     }
 
     public function applySavedFilter(): void
     {
-        if ($this->saved_filter_id <= 0) return;
+        if ($this->saved_filter_id <= 0) {
+            return;
+        }
 
         $sf = SavedFilter::where('user_id', auth()->id())
             ->where('scope', 'emails')
             ->find($this->saved_filter_id);
 
-        if (!$sf) return;
+        if (!$sf) {
+            return;
+        }
 
         $f = $sf->filters ?? [];
 
@@ -157,6 +235,8 @@ class Index extends Component
 
         $this->resetPage();
         $this->resetSelection();
+
+        $this->dispatch('toast', type: 'success', message: 'Saved filter applied.');
     }
 
     private function currentFilters(): array
@@ -175,7 +255,10 @@ class Index extends Component
     // ---------- Bulk Actions ----------
     public function runBulkAction(): void
     {
-        if (empty($this->selected)) return;
+        if (empty($this->selected)) {
+            $this->dispatch('toast', type: 'error', message: 'No emails selected.');
+            return;
+        }
 
         $this->validate([
             'action' => 'required|in:copy_to,move_to,merge_categories,suppress,unsuppress,detach',
@@ -185,16 +268,22 @@ class Index extends Component
 
         if ($this->action === 'suppress') {
             $this->bulkSuppress($ids);
+            $this->dispatch('toast', type: 'success', message: 'Selected emails suppressed.');
         } elseif ($this->action === 'unsuppress') {
             $this->bulkUnSuppress($ids);
+            $this->dispatch('toast', type: 'success', message: 'Selected emails unsuppressed.');
         } elseif ($this->action === 'copy_to') {
             $this->bulkCopyToCategory($ids);
+            $this->dispatch('toast', type: 'success', message: 'Copied to category.');
         } elseif ($this->action === 'move_to') {
             $this->bulkMoveToCategory($ids);
+            $this->dispatch('toast', type: 'success', message: 'Moved to category.');
         } elseif ($this->action === 'detach') {
             $this->bulkDetachFromCategory($ids);
+            $this->dispatch('toast', type: 'success', message: 'Detached from category.');
         } elseif ($this->action === 'merge_categories') {
             $this->bulkMergeCategories();
+            $this->dispatch('toast', type: 'success', message: 'Categories merged.');
         }
 
         $this->resetSelection();
@@ -237,7 +326,6 @@ class Index extends Component
             ];
         }
 
-        // ignore duplicates at DB level (unique category_id + email_address_id)
         DB::table('category_email')->upsert(
             $rows,
             ['category_id', 'email_address_id'],
@@ -252,10 +340,8 @@ class Index extends Component
             'target_category_id' => 'required|integer|exists:categories,id',
         ]);
 
-        // copy
         $this->bulkCopyToCategory($emailIds);
 
-        // detach from source category
         DB::table('category_email')
             ->where('category_id', $this->category_id)
             ->whereIn('email_address_id', $emailIds)
@@ -276,7 +362,6 @@ class Index extends Component
 
     private function bulkMergeCategories(): void
     {
-        // Merge category_id into target_category_id (all emails)
         $this->validate([
             'category_id' => 'required|integer|exists:categories,id',
             'target_category_id' => 'required|integer|exists:categories,id',

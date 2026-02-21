@@ -6,6 +6,7 @@ use App\Models\Category;
 use App\Models\EmailAddress;
 use App\Models\SuppressionEntry;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 use Livewire\Component;
 use Livewire\WithFileUploads;
 
@@ -19,6 +20,11 @@ class Upload extends Component
     public string $textarea = '';
 
     public $csv = null; // Livewire temp upload
+
+    // ✅ Create category from upload page
+    public string $new_category_name = '';
+    public string $new_category_slug = '';
+    public ?string $new_category_notes = null;
 
     // ✅ show summary on same page
     public array $result = [
@@ -48,8 +54,55 @@ class Upload extends Component
         }
     }
 
+    /**
+     * ✅ Create category instantly from this page.
+     */
+    public function createCategory(): void
+    {
+        $this->new_category_name = $this->normalizeName($this->new_category_name);
+        $this->new_category_slug = trim($this->new_category_slug);
+
+        $this->validate([
+            'new_category_name' => ['required', 'string', 'max:255'],
+            'new_category_slug' => ['nullable', 'string', 'max:255'],
+            'new_category_notes' => ['nullable', 'string'],
+        ]);
+
+        // case-insensitive duplicate check
+        if ($this->categoryNameExists($this->new_category_name)) {
+            throw ValidationException::withMessages([
+                'new_category_name' => 'This category name already exists.',
+            ]);
+        }
+
+        $slug = $this->new_category_slug !== ''
+            ? \Illuminate\Support\Str::slug($this->new_category_slug)
+            : \Illuminate\Support\Str::slug($this->new_category_name);
+
+        $slug = $this->uniqueSlug($slug);
+
+        $category = Category::create([
+            'name' => $this->new_category_name,
+            'slug' => $slug,
+            'notes' => $this->new_category_notes,
+        ]);
+
+        // Auto-select newly created category
+        $this->category_id = (int) $category->id;
+
+        // Clear create fields
+        $this->new_category_name = '';
+        $this->new_category_slug = '';
+        $this->new_category_notes = null;
+
+        $this->dispatch('toast', type: 'success', message: 'Category created and selected.');
+    }
+
     public function submit(): void
     {
+        // Optional progress / start toast
+        $this->dispatch('toast', type: 'info', message: 'Upload processing started...');
+
         // reset previous result
         $this->result = [
             'total' => 0,
@@ -90,8 +143,9 @@ class Upload extends Component
         $normalized = [];
         foreach ($rows as $raw) {
             $raw = trim((string) $raw);
-            if ($raw === '')
+            if ($raw === '') {
                 continue;
+            }
 
             // canonical lower
             $email = mb_strtolower($raw);
@@ -106,8 +160,9 @@ class Upload extends Component
         $seen = [];
         $unique = [];
         foreach ($normalized as $r) {
-            if (isset($seen[$r['email']]))
+            if (isset($seen[$r['email']])) {
                 continue;
+            }
             $seen[$r['email']] = true;
             $unique[] = $r;
         }
@@ -129,12 +184,12 @@ class Upload extends Component
                 ->whereIn('domain', $domains)
                 ->pluck('domain')
                 ->all();
+
             $suppressedDomains = array_fill_keys($suppressedDomains, true);
         }
 
         // Process in DB transaction
         DB::transaction(function () use ($unique, $category, $suppressedDomains) {
-
             foreach ($unique as $row) {
                 $raw = $row['raw'];
                 $email = $row['email'];
@@ -234,7 +289,12 @@ class Upload extends Component
         $this->textarea = '';
         $this->csv = null;
 
-        // You can show toast/message in blade using $result
+        // Finished toast
+        $this->dispatch(
+            'toast',
+            type: 'success',
+            message: "Upload completed. Inserted {$this->result['inserted']}, duplicates {$this->result['duplicates']}, invalid {$this->result['invalid']}."
+        );
     }
 
     private function parseTextarea(string $text): array
@@ -242,35 +302,70 @@ class Upload extends Component
         $text = str_replace(["\r\n", "\r"], "\n", $text);
         $chunks = preg_split('/[\n,;]+/', $text) ?: [];
 
-        return array_values(array_filter(array_map('trim', $chunks), fn($v) => $v !== ''));
+        return array_values(array_filter(array_map('trim', $chunks), fn ($v) => $v !== ''));
     }
 
     private function parseCsvUpload(): array
     {
         $rows = [];
 
-        if (!$this->csv)
+        if (!$this->csv) {
             return $rows;
+        }
 
         $path = $this->csv->getRealPath();
-        if (!$path)
+        if (!$path) {
             return $rows;
+        }
 
         $handle = fopen($path, 'r');
-        if (!$handle)
+        if (!$handle) {
             return $rows;
+        }
 
         while (($data = fgetcsv($handle)) !== false) {
             foreach ($data as $cell) {
                 $cell = trim((string) $cell);
-                if ($cell !== '')
+                if ($cell !== '') {
                     $rows[] = $cell;
+                }
             }
         }
 
         fclose($handle);
 
         return $rows;
+    }
+
+    private function normalizeName(string $value): string
+    {
+        $value = trim($value);
+        $value = preg_replace('/\s+/', ' ', $value) ?? $value;
+
+        return $value;
+    }
+
+    private function categoryNameExists(string $name): bool
+    {
+        $lower = mb_strtolower($name);
+
+        return Category::query()
+            ->whereRaw('LOWER(name) = ?', [$lower])
+            ->exists();
+    }
+
+    private function uniqueSlug(string $baseSlug): string
+    {
+        $slug = $baseSlug !== '' ? $baseSlug : \Illuminate\Support\Str::random(8);
+        $original = $slug;
+        $i = 2;
+
+        while (Category::query()->where('slug', $slug)->exists()) {
+            $slug = $original . '-' . $i;
+            $i++;
+        }
+
+        return $slug;
     }
 
     public function render()

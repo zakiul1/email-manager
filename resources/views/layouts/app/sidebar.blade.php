@@ -14,17 +14,7 @@
         </flux:sidebar.header>
 
         <flux:sidebar.nav>
-
-            {{-- Removed old Platform Dashboard group --}}
-            {{-- <flux:sidebar.group :heading="__('Platform')" class="grid">
-                <flux:sidebar.item :href="route('dashboard')" :current="request()->routeIs('dashboard')" wire:navigate>
-                    {{ __('Dashboard') }}
-                </flux:sidebar.item>
-            </flux:sidebar.group> --}}
-
             <flux:sidebar.group class="grid">
-
-                {{-- New Email Manager Dashboard --}}
                 <flux:sidebar.item :href="route('email-manager.dashboard')"
                     :current="request()->routeIs('email-manager.dashboard')" wire:navigate>
                     Dashboard
@@ -39,8 +29,6 @@
                     :current="request()->routeIs('email-manager.imports.upload')" wire:navigate>
                     Upload
                 </flux:sidebar.item>
-
-
 
                 <flux:sidebar.item :href="route('email-manager.suppressions')"
                     :current="request()->routeIs('email-manager.suppressions')" wire:navigate>
@@ -61,7 +49,6 @@
                     :current="request()->routeIs('email-manager.exports*')" wire:navigate>
                     Exports
                 </flux:sidebar.item>
-
             </flux:sidebar.group>
         </flux:sidebar.nav>
 
@@ -73,10 +60,9 @@
         <x-desktop-user-menu class="hidden lg:block" :name="auth()->user()->name" />
     </flux:sidebar>
 
-
     <!-- Mobile User Menu -->
     <flux:header class="lg:hidden">
-        <flux:sidebar.toggle class="lg:hidden" icon="bars-2" inset="left" />
+        <flux:sidebar.toggle class="lg:hidden" inset="left" />
 
         <flux:spacer />
 
@@ -100,7 +86,7 @@
                 <flux:menu.separator />
 
                 <flux:menu.radio.group>
-                    <flux:menu.item :href="route('profile.edit')" icon="cog" wire:navigate>
+                    <flux:menu.item :href="route('profile.edit')" wire:navigate>
                         {{ __('Settings') }}
                     </flux:menu.item>
                 </flux:menu.radio.group>
@@ -109,8 +95,7 @@
 
                 <form method="POST" action="{{ route('logout') }}" class="w-full">
                     @csrf
-                    <flux:menu.item as="button" type="submit" icon="arrow-right-start-on-rectangle"
-                        class="w-full cursor-pointer" data-test="logout-button">
+                    <flux:menu.item as="button" type="submit" class="w-full cursor-pointer" data-test="logout-button">
                         {{ __('Log Out') }}
                     </flux:menu.item>
                 </form>
@@ -120,7 +105,58 @@
 
     {{ $slot }}
 
+    {{-- ✅ Global Toast Container (top-right) --}}
+    <div id="toast-container" class="fixed top-4 right-4 z-[9999] flex flex-col gap-2"></div>
+
     @fluxScripts
+
+    {{-- ✅ Global Toast Script (dispatch + session flash support) --}}
+    <script>
+        (function () {
+            const container = document.getElementById('toast-container');
+
+            function toastClass(type) {
+                switch (type) {
+                    case 'success': return 'border-emerald-200 bg-emerald-50 text-emerald-900';
+                    case 'error':   return 'border-red-200 bg-red-50 text-red-900';
+                    case 'warning': return 'border-amber-200 bg-amber-50 text-amber-900';
+                    default:        return 'border-zinc-200 bg-white text-zinc-900';
+                }
+            }
+
+            // ✅ default timeout increased so user can read it
+            function showToast({ type = 'info', message = 'Done', timeout = 5000 }) {
+                if (!container) return;
+
+                const el = document.createElement('div');
+                el.className = `w-[320px] max-w-[90vw] rounded-lg border px-4 py-3 text-sm shadow ${toastClass(type)}`;
+
+                el.innerHTML = `
+                    <div class="flex items-start justify-between gap-3">
+                        <div class="leading-snug">${message}</div>
+                        <button class="text-xs opacity-70 hover:opacity-100" aria-label="Close">✕</button>
+                    </div>
+                `;
+
+                el.querySelector('button').addEventListener('click', () => el.remove());
+
+                container.appendChild(el);
+
+                setTimeout(() => el.remove(), timeout);
+            }
+
+            // Livewire dispatch event: $this->dispatch('toast', type: 'success', message: '...')
+            window.addEventListener('toast', function (event) {
+                showToast(event.detail || {});
+            });
+
+            // ✅ Show toast after redirect (session flash)
+            const flash = @json(session('toast'));
+            if (flash && flash.message) {
+                setTimeout(() => showToast(flash), 150);
+            }
+        })();
+    </script>
 </body>
 
 </html>
