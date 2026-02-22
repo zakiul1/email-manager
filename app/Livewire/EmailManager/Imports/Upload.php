@@ -5,7 +5,10 @@ namespace App\Livewire\EmailManager\Imports;
 use App\Models\Category;
 use App\Models\EmailAddress;
 use App\Models\SuppressionEntry;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Livewire\Component;
 use Livewire\WithFileUploads;
@@ -21,23 +24,53 @@ class Upload extends Component
 
     public $csv = null; // Livewire temp upload
 
-    // ✅ Create category from upload page
+    // ✅ Create category (modal form)
     public string $new_category_name = '';
     public string $new_category_slug = '';
     public ?string $new_category_notes = null;
 
-    // ✅ show summary on same page
+    // ✅ Force select refresh after create
+    public int $categoriesVersion = 0;
+
+    // ✅ show summary on same page (mirrors progress cache)
     public array $result = [
         'total' => 0,
+        'processed' => 0,
         'valid' => 0,
         'inserted' => 0,
         'duplicates' => 0,
         'suppressed' => 0,
         'invalid' => 0,
+        'status' => 'idle', // idle|processing|done|error|cancelled
+        'message' => null,
+        'percent' => 0,
     ];
 
-    // preview invalid items (optional UI)
     public array $invalidPreview = []; // [{raw,email,reason}...]
+
+    // Chunked upload tracking
+    public ?string $upload_id = null;
+
+    // Tune this for performance (200–1000). Safe default:
+    public int $chunkSize = 500;
+
+    // Cache TTL in seconds (2 hours)
+    private int $ttlSeconds = 7200;
+
+    private function progressKey(string $uploadId): string
+    {
+        return "email_upload_progress:{$uploadId}";
+    }
+
+    private function lockKey(string $uploadId): string
+    {
+        return "email_upload_lock:{$uploadId}";
+    }
+
+    private function tempPath(string $uploadId): string
+    {
+        return "tmp_uploads/{$uploadId}.txt";
+    }
 
     /**
      * When user switches between textarea/csv, reset the other input
@@ -55,7 +88,23 @@ class Upload extends Component
     }
 
     /**
-     * ✅ Create category instantly from this page.
+     * Reset create-category modal fields + errors.
+     */
+    public function resetCategoryForm(): void
+    {
+        $this->new_category_name = '';
+        $this->new_category_slug = '';
+        $this->new_category_notes = null;
+
+        $this->resetValidation([
+            'new_category_name',
+            'new_category_slug',
+            'new_category_notes',
+        ]);
+    }
+
+    /**
+     * ✅ Create category from modal, auto-select, refresh dropdown, close modal.
      */
     public function createCategory(): void
     {
@@ -68,7 +117,6 @@ class Upload extends Component
             'new_category_notes' => ['nullable', 'string'],
         ]);
 
-        // case-insensitive duplicate check
         if ($this->categoryNameExists($this->new_category_name)) {
             throw ValidationException::withMessages([
                 'new_category_name' => 'This category name already exists.',
@@ -76,8 +124,8 @@ class Upload extends Component
         }
 
         $slug = $this->new_category_slug !== ''
-            ? \Illuminate\Support\Str::slug($this->new_category_slug)
-            : \Illuminate\Support\Str::slug($this->new_category_name);
+            ? Str::slug($this->new_category_slug)
+            : Str::slug($this->new_category_name);
 
         $slug = $this->uniqueSlug($slug);
 
@@ -87,32 +135,41 @@ class Upload extends Component
             'notes' => $this->new_category_notes,
         ]);
 
-        // Auto-select newly created category
+        // ✅ auto-select + refresh dropdown options
         $this->category_id = (int) $category->id;
+        $this->categoriesVersion++;
 
-        // Clear create fields
-        $this->new_category_name = '';
-        $this->new_category_slug = '';
-        $this->new_category_notes = null;
+        // clear modal fields
+        $this->resetCategoryForm();
 
-        $this->dispatch('toast', type: 'success', message: 'Category created and selected.');
+        // ✅ close modal (Flux listens to this)
+        $this->dispatch('close-modal', name: 'create-category');
+
+        $this->dispatch('toast', type: 'success', message: 'Category created and selected.', timeout: 5000);
     }
 
+    /**
+     * START upload: parse input, normalize, de-dupe, write to temp file,
+     * initialize progress in cache. (No heavy DB processing here.)
+     *
+     * Then frontend will repeatedly call processChunk() until done.
+     */
     public function submit(): void
     {
-        // Optional progress / start toast
-        $this->dispatch('toast', type: 'info', message: 'Upload processing started...');
-
-        // reset previous result
+        // reset preview and result
+        $this->invalidPreview = [];
         $this->result = [
             'total' => 0,
+            'processed' => 0,
             'valid' => 0,
             'inserted' => 0,
             'duplicates' => 0,
             'suppressed' => 0,
             'invalid' => 0,
+            'status' => 'idle',
+            'message' => null,
+            'percent' => 0,
         ];
-        $this->invalidPreview = [];
 
         // Base validation
         $this->validate([
@@ -131,170 +188,366 @@ class Upload extends Component
             ]);
         }
 
-        $category = Category::findOrFail($this->category_id);
-
         $rows = $this->mode === 'textarea'
             ? $this->parseTextarea($this->textarea)
             : $this->parseCsvUpload();
 
-        $this->result['total'] = count($rows);
-
-        // Normalize + pre-validate + remove empty
+        // Normalize + remove empty
         $normalized = [];
         foreach ($rows as $raw) {
             $raw = trim((string) $raw);
             if ($raw === '') {
                 continue;
             }
-
-            // canonical lower
             $email = mb_strtolower($raw);
-
-            $normalized[] = [
-                'raw' => $raw,
-                'email' => $email,
-            ];
+            $normalized[] = $email;
         }
 
-        // quick de-dupe in same upload to reduce work
-        $seen = [];
-        $unique = [];
-        foreach ($normalized as $r) {
-            if (isset($seen[$r['email']])) {
-                continue;
+        // De-dupe inside same upload
+        $normalized = array_values(array_unique($normalized));
+
+        if (count($normalized) === 0) {
+            $this->dispatch('toast', type: 'warning', message: 'No emails found to upload.', timeout: 5000);
+            return;
+        }
+
+        // Create upload_id and save temp file
+        $uploadId = (string) Str::uuid();
+        $this->upload_id = $uploadId;
+
+        // Ensure directory exists on local disk
+        if (!Storage::exists('tmp_uploads')) {
+            Storage::makeDirectory('tmp_uploads');
+        }
+
+        Storage::put($this->tempPath($uploadId), implode("\n", $normalized));
+
+        // Initialize progress in cache
+        $progress = [
+            'status' => 'processing',
+            'message' => null,
+            'category_id' => (int) $this->category_id,
+            'total' => count($normalized),
+            'processed' => 0,
+            'valid' => 0,
+            'inserted' => 0,
+            'duplicates' => 0,
+            'suppressed' => 0,
+            'invalid' => 0,
+            'cursor' => 0, // line number cursor
+            'invalidPreview' => [],
+        ];
+
+        Cache::put($this->progressKey($uploadId), $progress, $this->ttlSeconds);
+
+        // clear inputs right away (so user doesn’t re-submit same payload)
+        $this->textarea = '';
+        $this->csv = null;
+
+        $this->dispatch('toast', type: 'info', message: 'Upload started. Processing in chunks...', timeout: 4000);
+
+        // Update local UI snapshot
+        $this->refreshProgress();
+    }
+
+    /**
+     * Refresh UI progress from cache.
+     * Call with wire:poll.1s
+     */
+    public function refreshProgress(): void
+    {
+        if (!$this->upload_id) {
+            return;
+        }
+
+        $p = Cache::get($this->progressKey($this->upload_id));
+        if (!is_array($p)) {
+            return;
+        }
+
+        // Keep invalid preview small for UI
+        $this->invalidPreview = $p['invalidPreview'] ?? [];
+
+        $total = (int) ($p['total'] ?? 0);
+        $processed = (int) ($p['processed'] ?? 0);
+        $percent = $total > 0 ? (int) floor(($processed / $total) * 100) : 0;
+
+        $this->result = [
+            'total' => $total,
+            'processed' => $processed,
+            'valid' => (int) ($p['valid'] ?? 0),
+            'inserted' => (int) ($p['inserted'] ?? 0),
+            'duplicates' => (int) ($p['duplicates'] ?? 0),
+            'suppressed' => (int) ($p['suppressed'] ?? 0),
+            'invalid' => (int) ($p['invalid'] ?? 0),
+            'status' => (string) ($p['status'] ?? 'idle'),
+            'message' => $p['message'] ?? null,
+            'percent' => $percent,
+        ];
+    }
+
+    /**
+     * Process next chunk of emails.
+     * Frontend should call this repeatedly until status = done/error/cancelled.
+     */
+    public function processChunk(): void
+    {
+        if (!$this->upload_id) {
+            return;
+        }
+
+        $uploadId = $this->upload_id;
+
+        $lock = Cache::lock($this->lockKey($uploadId), 15);
+        if (!$lock->get()) {
+            // Another request is processing; just return.
+            return;
+        }
+
+        try {
+            $p = Cache::get($this->progressKey($uploadId));
+            if (!is_array($p)) {
+                return;
             }
-            $seen[$r['email']] = true;
-            $unique[] = $r;
-        }
 
-        // Preload domain suppressions for speed
-        $domains = [];
-        foreach ($unique as $r) {
-            $parts = explode('@', $r['email']);
-            if (count($parts) === 2 && $parts[1] !== '') {
-                $domains[] = $parts[1];
+            if (($p['status'] ?? '') !== 'processing') {
+                return;
             }
-        }
-        $domains = array_values(array_unique($domains));
 
-        $suppressedDomains = [];
-        if (!empty($domains)) {
-            $suppressedDomains = SuppressionEntry::query()
-                ->where('scope', 'domain')
-                ->whereIn('domain', $domains)
-                ->pluck('domain')
-                ->all();
+            $categoryId = (int) ($p['category_id'] ?? 0);
+            if ($categoryId <= 0) {
+                $p['status'] = 'error';
+                $p['message'] = 'Missing category id.';
+                Cache::put($this->progressKey($uploadId), $p, $this->ttlSeconds);
+                return;
+            }
 
-            $suppressedDomains = array_fill_keys($suppressedDomains, true);
-        }
+            $filePath = $this->tempPath($uploadId);
+            if (!Storage::exists($filePath)) {
+                $p['status'] = 'error';
+                $p['message'] = 'Upload temp file not found.';
+                Cache::put($this->progressKey($uploadId), $p, $this->ttlSeconds);
+                return;
+            }
 
-        // Process in DB transaction
-        DB::transaction(function () use ($unique, $category, $suppressedDomains) {
-            foreach ($unique as $row) {
-                $raw = $row['raw'];
-                $email = $row['email'];
+            $absolute = Storage::path($filePath);
 
-                // Validate format
-                if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-                    $this->result['invalid']++;
+            $cursor = (int) ($p['cursor'] ?? 0);
+            $chunkSize = max(50, (int) $this->chunkSize);
 
-                    if (count($this->invalidPreview) < 50) {
-                        $this->invalidPreview[] = [
-                            'raw' => $raw,
-                            'email' => $email,
-                            'reason' => 'Invalid format',
-                        ];
+            // Read next chunk lines using SplFileObject (low memory)
+            $file = new \SplFileObject($absolute, 'r');
+            $file->setFlags(\SplFileObject::DROP_NEW_LINE);
+
+            $emails = [];
+            $file->seek($cursor);
+
+            $read = 0;
+            while (!$file->eof() && $read < $chunkSize) {
+                $line = (string) $file->current();
+                $file->next();
+                $cursor++;
+                $read++;
+
+                $email = trim($line);
+                if ($email === '') {
+                    continue;
+                }
+                $emails[] = $email;
+            }
+
+            if (count($emails) === 0) {
+                // finished
+                $p['status'] = 'done';
+                $p['cursor'] = $cursor;
+                Cache::put($this->progressKey($uploadId), $p, $this->ttlSeconds);
+                Storage::delete($filePath);
+
+                $this->dispatch('toast', type: 'success', timeout: 6000, message: "Upload completed. Inserted {$p['inserted']}, duplicates {$p['duplicates']}, invalid {$p['invalid']}.");
+                $this->refreshProgress();
+                return;
+            }
+
+            // Build domain suppression map for this chunk
+            $domains = [];
+            foreach ($emails as $e) {
+                $parts = explode('@', $e, 2);
+                if (count($parts) === 2 && $parts[1] !== '') {
+                    $domains[] = trim($parts[1]);
+                }
+            }
+            $domains = array_values(array_unique(array_filter($domains)));
+
+            $suppressedDomains = [];
+            if (!empty($domains)) {
+                $suppressedDomains = SuppressionEntry::query()
+                    ->where('scope', 'domain')
+                    ->whereIn('domain', $domains)
+                    ->pluck('domain')
+                    ->all();
+                $suppressedDomains = array_fill_keys($suppressedDomains, true);
+            }
+
+            // Chunk counters
+            $valid = 0;
+            $inserted = 0;
+            $duplicates = 0;
+            $suppressed = 0;
+            $invalid = 0;
+
+            // Use transaction per chunk (safer + consistent)
+            DB::transaction(function () use (
+                $emails,
+                $categoryId,
+                $suppressedDomains,
+                &$valid,
+                &$inserted,
+                &$duplicates,
+                &$suppressed,
+                &$invalid,
+                &$p
+            ) {
+                foreach ($emails as $email) {
+                    $raw = $email;
+
+                    if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                        $invalid++;
+                        $this->pushInvalidPreview($p, $raw, $email, 'Invalid format');
+                        continue;
                     }
-                    continue;
-                }
 
-                [$local, $domain] = explode('@', $email, 2);
-                $local = trim($local);
-                $domain = trim($domain);
+                    [$local, $domain] = explode('@', $email, 2);
+                    $local = trim($local);
+                    $domain = trim($domain);
 
-                if ($local === '' || $domain === '') {
-                    $this->result['invalid']++;
-
-                    if (count($this->invalidPreview) < 50) {
-                        $this->invalidPreview[] = [
-                            'raw' => $raw,
-                            'email' => $email,
-                            'reason' => 'Invalid parts',
-                        ];
+                    if ($local === '' || $domain === '') {
+                        $invalid++;
+                        $this->pushInvalidPreview($p, $raw, $email, 'Invalid parts');
+                        continue;
                     }
-                    continue;
-                }
 
-                // Domain unsubscribe check
-                if (isset($suppressedDomains[$domain])) {
-                    $this->result['suppressed']++;
-                    continue;
-                }
+                    if (isset($suppressedDomains[$domain])) {
+                        $suppressed++;
+                        continue;
+                    }
 
-                // Upsert EmailAddress
-                $emailAddress = EmailAddress::firstOrCreate(
-                    ['email' => $email],
-                    [
-                        'local_part' => $local,
-                        'domain' => $domain,
-                        'is_valid' => true,
-                        'invalid_reason' => null,
-                    ]
-                );
+                    $emailAddress = EmailAddress::firstOrCreate(
+                        ['email' => $email],
+                        [
+                            'local_part' => $local,
+                            'domain' => $domain,
+                            'is_valid' => true,
+                            'invalid_reason' => null,
+                        ]
+                    );
 
-                // Global suppression check (by email_address_id)
-                $isGloballySuppressed = SuppressionEntry::query()
-                    ->where('scope', 'global')
-                    ->where('email_address_id', $emailAddress->id)
-                    ->exists();
+                    $isGloballySuppressed = SuppressionEntry::query()
+                        ->where('scope', 'global')
+                        ->where('email_address_id', $emailAddress->id)
+                        ->exists();
 
-                if ($isGloballySuppressed) {
-                    $this->result['suppressed']++;
-                    continue;
-                }
+                    if ($isGloballySuppressed) {
+                        $suppressed++;
+                        continue;
+                    }
 
-                $this->result['valid']++;
+                    $valid++;
 
-                // Attach to category (duplicate per category handled here)
-                $pivot = DB::table('category_email')
-                    ->where('category_id', $category->id)
-                    ->where('email_address_id', $emailAddress->id)
-                    ->first();
+                    // ✅ Same category duplicate rule:
+                    // If already exists in this category -> DO NOTHING (skip), just count duplicate.
+                    $exists = DB::table('category_email')
+                        ->where('category_id', $categoryId)
+                        ->where('email_address_id', $emailAddress->id)
+                        ->exists();
 
-                if ($pivot) {
-                    DB::table('category_email')
-                        ->where('id', $pivot->id)
-                        ->update([
-                            'times_added' => (int) $pivot->times_added + 1,
-                            'updated_at' => now(),
-                        ]);
+                    if ($exists) {
+                        $duplicates++;
+                        continue;
+                    }
 
-                    $this->result['duplicates']++;
-                } else {
                     DB::table('category_email')->insert([
-                        'category_id' => $category->id,
+                        'category_id' => $categoryId,
                         'email_address_id' => $emailAddress->id,
                         'times_added' => 1,
-                        'import_batch_id' => null, // ✅ no batches
+                        'import_batch_id' => null,
                         'created_at' => now(),
                         'updated_at' => now(),
                     ]);
 
-                    $this->result['inserted']++;
+                    $inserted++;
                 }
+            });
+
+            // Update progress
+            $p['cursor'] = $cursor;
+            $p['processed'] = (int) ($p['processed'] ?? 0) + count($emails);
+            $p['valid'] = (int) ($p['valid'] ?? 0) + $valid;
+            $p['inserted'] = (int) ($p['inserted'] ?? 0) + $inserted;
+            $p['duplicates'] = (int) ($p['duplicates'] ?? 0) + $duplicates;
+            $p['suppressed'] = (int) ($p['suppressed'] ?? 0) + $suppressed;
+            $p['invalid'] = (int) ($p['invalid'] ?? 0) + $invalid;
+
+            // If reached or exceeded total, finalize (safety)
+            $total = (int) ($p['total'] ?? 0);
+            if ($total > 0 && $p['processed'] >= $total) {
+                $p['status'] = 'done';
+                Storage::delete($this->tempPath($uploadId));
             }
-        });
 
-        // optional: clear input after success
-        $this->textarea = '';
-        $this->csv = null;
+            Cache::put($this->progressKey($uploadId), $p, $this->ttlSeconds);
 
-        // Finished toast
-        $this->dispatch(
-            'toast',
-            type: 'success',
-            message: "Upload completed. Inserted {$this->result['inserted']}, duplicates {$this->result['duplicates']}, invalid {$this->result['invalid']}."
-        );
+            $this->refreshProgress();
+        } catch (\Throwable $e) {
+            $p = Cache::get($this->progressKey($this->upload_id));
+            if (is_array($p)) {
+                $p['status'] = 'error';
+                $p['message'] = $e->getMessage();
+                Cache::put($this->progressKey($this->upload_id), $p, $this->ttlSeconds);
+            }
+
+            $this->dispatch('toast', type: 'error', message: 'Upload failed: ' . $e->getMessage(), timeout: 7000);
+            $this->refreshProgress();
+        } finally {
+            optional($lock)->release();
+        }
+    }
+
+    public function cancelUpload(): void
+    {
+        if (!$this->upload_id) {
+            return;
+        }
+
+        $uploadId = $this->upload_id;
+        $p = Cache::get($this->progressKey($uploadId));
+
+        if (is_array($p)) {
+            $p['status'] = 'cancelled';
+            $p['message'] = 'Cancelled by user.';
+            Cache::put($this->progressKey($uploadId), $p, $this->ttlSeconds);
+        }
+
+        Storage::delete($this->tempPath($uploadId));
+
+        $this->dispatch('toast', type: 'warning', message: 'Upload cancelled.', timeout: 4000);
+        $this->refreshProgress();
+    }
+
+    private function pushInvalidPreview(array &$progress, string $raw, string $email, string $reason): void
+    {
+        if (!isset($progress['invalidPreview']) || !is_array($progress['invalidPreview'])) {
+            $progress['invalidPreview'] = [];
+        }
+
+        if (count($progress['invalidPreview']) >= 50) {
+            return;
+        }
+
+        $progress['invalidPreview'][] = [
+            'raw' => $raw,
+            'email' => $email,
+            'reason' => $reason,
+        ];
     }
 
     private function parseTextarea(string $text): array
@@ -356,7 +609,7 @@ class Upload extends Component
 
     private function uniqueSlug(string $baseSlug): string
     {
-        $slug = $baseSlug !== '' ? $baseSlug : \Illuminate\Support\Str::random(8);
+        $slug = $baseSlug !== '' ? $baseSlug : Str::random(8);
         $original = $slug;
         $i = 2;
 
