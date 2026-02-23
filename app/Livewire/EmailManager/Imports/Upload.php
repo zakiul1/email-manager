@@ -3,6 +3,7 @@
 namespace App\Livewire\EmailManager\Imports;
 
 use App\Models\Category;
+use App\Models\DomainUnsubscribe;
 use App\Models\EmailAddress;
 use App\Models\SuppressionEntry;
 use Illuminate\Support\Facades\Cache;
@@ -287,6 +288,37 @@ class Upload extends Component
     }
 
     /**
+     * Helper: check if given domain is blocked by DomainUnsubscribes
+     * - exact domain match (type=domain, value=domain)
+     * - extension match (type=extension, value=.bd matches abc.bd)
+     */
+    private function isDomainUnsubscribed(string $domain, array $blockedExactDomains, array $blockedExtensions): bool
+    {
+        $d = mb_strtolower(trim($domain));
+        $d = ltrim($d, '@');
+
+        if ($d === '') {
+            return false;
+        }
+
+        // Exact domain
+        if (isset($blockedExactDomains[$d])) {
+            return true;
+        }
+
+        // Extension match (suffix)
+        foreach ($blockedExtensions as $ext) {
+            if ($ext === '')
+                continue;
+            if (str_ends_with($d, $ext)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
      * Process next chunk of emails.
      * Frontend should call this repeatedly until status = done/error/cancelled.
      */
@@ -368,7 +400,7 @@ class Upload extends Component
                 return;
             }
 
-            // Build domain suppression map for this chunk
+            // Build domain list for this chunk
             $domains = [];
             foreach ($emails as $e) {
                 $parts = explode('@', $e, 2);
@@ -378,6 +410,7 @@ class Upload extends Component
             }
             $domains = array_values(array_unique(array_filter($domains)));
 
+            // Domain Suppression (existing feature)
             $suppressedDomains = [];
             if (!empty($domains)) {
                 $suppressedDomains = SuppressionEntry::query()
@@ -388,6 +421,36 @@ class Upload extends Component
                 $suppressedDomains = array_fill_keys($suppressedDomains, true);
             }
 
+            /**
+             * NEW: Domain Unsubscribes (domain + extension)
+             * - exact match for domains in this chunk
+             * - load all extensions once per chunk
+             */
+            $blockedExactDomains = [];
+            if (!empty($domains)) {
+                $exact = DomainUnsubscribe::query()
+                    ->where('type', 'domain')
+                    ->whereIn('value', $domains)
+                    ->pluck('value')
+                    ->all();
+                $blockedExactDomains = array_fill_keys($exact, true);
+            }
+
+            $blockedExtensions = DomainUnsubscribe::query()
+                ->where('type', 'extension')
+                ->pluck('value')
+                ->all();
+
+            // normalize extensions to lowercase and ensure starting dot
+            $blockedExtensions = array_values(array_unique(array_map(function ($v) {
+                $v = mb_strtolower(trim((string) $v));
+                if ($v === '')
+                    return '';
+                if ($v[0] !== '.')
+                    $v = '.' . ltrim($v, '.');
+                return $v;
+            }, $blockedExtensions)));
+
             // Chunk counters
             $valid = 0;
             $inserted = 0;
@@ -396,17 +459,7 @@ class Upload extends Component
             $invalid = 0;
 
             // Use transaction per chunk (safer + consistent)
-            DB::transaction(function () use (
-                $emails,
-                $categoryId,
-                $suppressedDomains,
-                &$valid,
-                &$inserted,
-                &$duplicates,
-                &$suppressed,
-                &$invalid,
-                &$p
-            ) {
+            DB::transaction(function () use ($emails, $categoryId, $suppressedDomains, $blockedExactDomains, $blockedExtensions, &$valid, &$inserted, &$duplicates, &$suppressed, &$invalid, &$p) {
                 foreach ($emails as $email) {
                     $raw = $email;
 
@@ -426,6 +479,17 @@ class Upload extends Component
                         continue;
                     }
 
+                    /**
+                     * NEW: Domain Unsubscribes check FIRST (so it never inserts anywhere)
+                     * - exact domain
+                     * - extension suffix match
+                     */
+                    if ($this->isDomainUnsubscribed($domain, $blockedExactDomains, $blockedExtensions)) {
+                        $suppressed++;
+                        continue;
+                    }
+
+                    // Existing: domain-level suppression
                     if (isset($suppressedDomains[$domain])) {
                         $suppressed++;
                         continue;
@@ -454,7 +518,6 @@ class Upload extends Component
                     $valid++;
 
                     // ✅ Same category duplicate rule:
-                    // If already exists in this category -> DO NOTHING (skip), just count duplicate.
                     $exists = DB::table('category_email')
                         ->where('category_id', $categoryId)
                         ->where('email_address_id', $emailAddress->id)
@@ -555,7 +618,7 @@ class Upload extends Component
         $text = str_replace(["\r\n", "\r"], "\n", $text);
         $chunks = preg_split('/[\n,;]+/', $text) ?: [];
 
-        return array_values(array_filter(array_map('trim', $chunks), fn ($v) => $v !== ''));
+        return array_values(array_filter(array_map('trim', $chunks), fn($v) => $v !== ''));
     }
 
     private function parseCsvUpload(): array

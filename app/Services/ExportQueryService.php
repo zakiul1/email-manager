@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\DomainUnsubscribe;
 use App\Models\EmailAddress;
 use Illuminate\Database\Eloquent\Builder;
 
@@ -9,13 +10,13 @@ class ExportQueryService
 {
     public function build(array $filters): Builder
     {
-        $categoryId = (int)($filters['category_id'] ?? 0);
+        $categoryId = (int) ($filters['category_id'] ?? 0);
 
         $q = EmailAddress::query()->select('email_addresses.*');
 
         if ($categoryId > 0) {
             $q->join('category_email', 'category_email.email_address_id', '=', 'email_addresses.id')
-              ->where('category_email.category_id', $categoryId);
+                ->where('category_email.category_id', $categoryId);
         }
 
         if (!empty($filters['domain'])) {
@@ -38,12 +39,27 @@ class ExportQueryService
             });
         }
 
-        // Exclude domain unsubscribes
+        /**
+         * Exclude domain unsubscribes (NEW):
+         * - type=domain: exact match (value == email_addresses.domain)
+         * - type=extension: suffix match (email_addresses.domain ends with value)
+         */
         if (!empty($filters['exclude_domain_unsubscribes'])) {
+            // exact domains
             $q->whereNotExists(function ($sub) {
                 $sub->selectRaw(1)
                     ->from('domain_unsubscribes')
-                    ->whereColumn('domain_unsubscribes.domain', 'email_addresses.domain');
+                    ->where('domain_unsubscribes.type', 'domain')
+                    ->whereColumn('domain_unsubscribes.value', 'email_addresses.domain');
+            });
+
+            // extensions (suffix)
+            // NOTE: MySQL syntax with CONCAT + LIKE. Works for common MySQL/MariaDB setups.
+            $q->whereNotExists(function ($sub) {
+                $sub->selectRaw(1)
+                    ->from('domain_unsubscribes')
+                    ->where('domain_unsubscribes.type', 'extension')
+                    ->whereRaw("LOWER(email_addresses.domain) LIKE CONCAT('%', LOWER(domain_unsubscribes.value))");
             });
         }
 

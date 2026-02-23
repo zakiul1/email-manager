@@ -29,7 +29,10 @@
                     :current="request()->routeIs('email-manager.imports.upload')" wire:navigate>
                     Upload
                 </flux:sidebar.item>
-
+                <flux:sidebar.item :href="route('email-manager.emails')"
+                    :current="request()->routeIs('email-manager.emails')" wire:navigate>
+                    Emails
+                </flux:sidebar.item>
                 <flux:sidebar.item :href="route('email-manager.suppressions')"
                     :current="request()->routeIs('email-manager.suppressions')" wire:navigate>
                     Suppressions
@@ -40,10 +43,7 @@
                     Domain Unsubscribes
                 </flux:sidebar.item>
 
-                <flux:sidebar.item :href="route('email-manager.emails')"
-                    :current="request()->routeIs('email-manager.emails')" wire:navigate>
-                    Emails
-                </flux:sidebar.item>
+
 
                 <flux:sidebar.item :href="route('email-manager.exports')"
                     :current="request()->routeIs('email-manager.exports*')" wire:navigate>
@@ -95,7 +95,8 @@
 
                 <form method="POST" action="{{ route('logout') }}" class="w-full">
                     @csrf
-                    <flux:menu.item as="button" type="submit" class="w-full cursor-pointer" data-test="logout-button">
+                    <flux:menu.item as="button" type="submit" class="w-full cursor-pointer"
+                        data-test="logout-button">
                         {{ __('Log Out') }}
                     </flux:menu.item>
                 </form>
@@ -112,20 +113,28 @@
 
     {{-- ✅ Global Toast Script (dispatch + session flash support) --}}
     <script>
-        (function () {
+        (function() {
             const container = document.getElementById('toast-container');
 
             function toastClass(type) {
                 switch (type) {
-                    case 'success': return 'border-emerald-200 bg-emerald-50 text-emerald-900';
-                    case 'error':   return 'border-red-200 bg-red-50 text-red-900';
-                    case 'warning': return 'border-amber-200 bg-amber-50 text-amber-900';
-                    default:        return 'border-zinc-200 bg-white text-zinc-900';
+                    case 'success':
+                        return 'border-emerald-200 bg-emerald-50 text-emerald-900';
+                    case 'error':
+                        return 'border-red-200 bg-red-50 text-red-900';
+                    case 'warning':
+                        return 'border-amber-200 bg-amber-50 text-amber-900';
+                    default:
+                        return 'border-zinc-200 bg-white text-zinc-900';
                 }
             }
 
             // ✅ default timeout increased so user can read it
-            function showToast({ type = 'info', message = 'Done', timeout = 5000 }) {
+            function showToast({
+                type = 'info',
+                message = 'Done',
+                timeout = 5000
+            }) {
                 if (!container) return;
 
                 const el = document.createElement('div');
@@ -146,7 +155,7 @@
             }
 
             // Livewire dispatch event: $this->dispatch('toast', type: 'success', message: '...')
-            window.addEventListener('toast', function (event) {
+            window.addEventListener('toast', function(event) {
                 showToast(event.detail || {});
             });
 

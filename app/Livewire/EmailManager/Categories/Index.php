@@ -17,6 +17,10 @@ class Index extends Component
     public int $deleteCategoryId = 0;
     public string $deleteCategoryName = '';
 
+    // ✅ Hard warning confirmation
+    public string $deleteConfirmText = ''; // user must type DELETE
+    public bool $dangerAcknowledge = false; // optional checkbox (use in Blade if you want)
+
     public function updatingSearch(): void
     {
         $this->resetPage();
@@ -24,7 +28,6 @@ class Index extends Component
 
     /**
      * Set the category data that will be shown in the modal.
-     * ✅ Do NOT dispatch open-modal here (Flux will open via <flux:modal.trigger> in Blade)
      */
     public function confirmDelete(int $categoryId): void
     {
@@ -32,11 +35,19 @@ class Index extends Component
 
         $this->deleteCategoryId = (int) $category->id;
         $this->deleteCategoryName = (string) $category->name;
+
+        // reset danger confirmation each time modal opens
+        $this->deleteConfirmText = '';
+        $this->dangerAcknowledge = false;
     }
 
     /**
-     * Delete only after user confirms in modal.
-     * ✅ Do NOT dispatch close-modal here (Flux will close via <flux:modal.close> in Blade)
+     * Option B (Danger):
+     * - Delete pivot rows for this category
+     * - Delete the category
+     * - Delete orphan email_addresses not linked to any category anymore
+     *
+     * Hard warning: require typing DELETE
      */
     public function deleteConfirmed(): void
     {
@@ -45,22 +56,42 @@ class Index extends Component
             return;
         }
 
-        $category = Category::query()->withCount('emails')->findOrFail($this->deleteCategoryId);
-
-        if (($category->emails_count ?? 0) > 0) {
-            $this->dispatch('toast', type: 'error', message: 'You cannot delete this category because it has emails.', timeout: 5000);
+        // ✅ Hard warning check
+        if (trim($this->deleteConfirmText) !== 'DELETE') {
+            $this->dispatch('toast', type: 'error', message: 'Type DELETE to confirm this dangerous action.', timeout: 6000);
             return;
         }
 
-        $category->delete();
+        $category = Category::query()->withCount('emails')->findOrFail($this->deleteCategoryId);
 
-        $this->dispatch('toast', type: 'success', message: 'Category deleted successfully.', timeout: 5000);
+        DB::transaction(function () use ($category) {
+            // 1) Remove all relations for this category
+            DB::table('category_email')
+                ->where('category_id', $category->id)
+                ->delete();
+
+            // 2) Delete the category itself
+            $category->delete();
+
+            // 3) Delete orphan email addresses (not linked to any category)
+            //    This is the "danger" part: permanently deletes emails that are not used elsewhere.
+            DB::table('email_addresses')
+                ->whereNotExists(function ($q) {
+                    $q->select(DB::raw(1))
+                        ->from('category_email')
+                        ->whereColumn('category_email.email_address_id', 'email_addresses.id');
+                })
+                ->delete();
+        });
+
+        $this->dispatch('toast', type: 'success', message: 'Category deleted. Orphan emails cleaned up.', timeout: 6000);
 
         // reset modal state
         $this->deleteCategoryId = 0;
         $this->deleteCategoryName = '';
+        $this->deleteConfirmText = '';
+        $this->dangerAcknowledge = false;
 
-        // ✅ Safe after delete
         $this->resetPage();
     }
 
@@ -74,7 +105,7 @@ class Index extends Component
         $categories = Category::query()
             ->select('categories.*')
             ->withCount('emails')
-            ->when($this->search !== '', fn ($q) => $q->where('name', 'like', '%' . $this->search . '%'))
+            ->when($this->search !== '', fn($q) => $q->where('name', 'like', '%' . $this->search . '%'))
             ->orderBy('name')
             ->paginate($perPage);
 

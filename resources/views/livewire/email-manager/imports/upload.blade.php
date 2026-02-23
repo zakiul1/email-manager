@@ -17,26 +17,35 @@
                 $processed = (int) ($result['processed'] ?? 0);
                 $percent = (int) ($result['percent'] ?? 0);
                 $message = $result['message'] ?? null;
+
+                // ✅ bar color that ALWAYS exists in Tailwind
+                $barColor = match ($status) {
+                    'processing' => 'bg-blue-600',
+                    'done' => 'bg-emerald-600',
+                    'cancelled' => 'bg-amber-600',
+                    'error' => 'bg-red-600',
+                    default => 'bg-zinc-400',
+                };
             @endphp
 
-            @if(in_array($status, ['processing','done','error','cancelled'], true))
-                <div class="rounded-md border p-4 text-sm
-                    @if($status === 'processing') border-blue-200 bg-blue-50
+            @if (in_array($status, ['processing', 'done', 'error', 'cancelled'], true))
+                <div
+                    class="rounded-md border p-4 text-sm
+                    @if ($status === 'processing') border-blue-200 bg-blue-50
                     @elseif($status === 'done') border-emerald-200 bg-emerald-50
                     @elseif($status === 'cancelled') border-amber-200 bg-amber-50
-                    @else border-red-300 bg-red-50
-                    @endif
+                    @else border-red-300 bg-red-50 @endif
                 ">
                     <div class="flex items-start justify-between gap-3">
                         <div>
-                            <div class="font-medium
-                                @if($status === 'processing') text-blue-800
+                            <div
+                                class="font-medium
+                                @if ($status === 'processing') text-blue-800
                                 @elseif($status === 'done') text-emerald-800
                                 @elseif($status === 'cancelled') text-amber-800
-                                @else text-red-800
-                                @endif
+                                @else text-red-800 @endif
                             ">
-                                @if($status === 'processing')
+                                @if ($status === 'processing')
                                     Import in progress
                                 @elseif($status === 'done')
                                     Import completed
@@ -48,28 +57,26 @@
                             </div>
 
                             <div class="mt-1 text-xs text-muted-foreground">
-                                Progress: <span class="font-semibold">{{ $processed }}</span> / <span class="font-semibold">{{ $total }}</span>
+                                Progress: <span class="font-semibold">{{ $processed }}</span> / <span
+                                    class="font-semibold">{{ $total }}</span>
                                 <span class="ml-2">({{ $percent }}%)</span>
-                                @if(!empty($message))
+                                @if (!empty($message))
                                     <span class="ml-2">— {{ $message }}</span>
                                 @endif
                             </div>
                         </div>
 
-                        @if($status === 'processing')
-                            <button
-                                type="button"
-                                wire:click="cancelUpload"
-                                class="rounded-md border px-3 py-2 text-xs bg-white hover:bg-muted"
-                            >
+                        @if ($status === 'processing')
+                            <button type="button" wire:click="cancelUpload"
+                                class="rounded-md border px-3 py-2 text-xs bg-white hover:bg-muted">
                                 Cancel
                             </button>
                         @endif
                     </div>
 
-                    {{-- Progress bar --}}
+                    {{-- ✅ Progress bar (FIXED) --}}
                     <div class="mt-3 h-2 w-full rounded bg-white/60 overflow-hidden border">
-                        <div class="h-2 bg-foreground/60" style="width: {{ $percent }}%"></div>
+                        <div class="h-2 {{ $barColor }}" style="width: {{ $percent }}%"></div>
                     </div>
 
                     {{-- Counters --}}
@@ -108,7 +115,7 @@
         </div>
 
         {{-- ✅ THIS is the key: run chunk processing automatically --}}
-        @if(($result['status'] ?? 'idle') === 'processing')
+        @if (($result['status'] ?? 'idle') === 'processing')
             <div class="hidden" wire:poll.500ms="processChunk"></div>
         @endif
 
@@ -131,12 +138,8 @@
                 <flux:label>Category</flux:label>
 
                 <div class="flex gap-2">
-                    <select
-                        wire:key="categories-select-{{ $categoriesVersion }}"
-                        wire:model="category_id"
-                        class="w-full rounded-md border px-3 py-2 text-sm"
-                        @disabled(($result['status'] ?? 'idle') === 'processing')
-                    >
+                    <select wire:key="categories-select-{{ $categoriesVersion }}" wire:model="category_id"
+                        class="w-full rounded-md border px-3 py-2 text-sm" @disabled(($result['status'] ?? 'idle') === 'processing')>
                         <option value="0">Select category...</option>
                         @foreach ($categories as $cat)
                             <option value="{{ $cat->id }}">{{ $cat->name }}</option>
@@ -144,11 +147,8 @@
                     </select>
 
                     <flux:modal.trigger name="create-category">
-                        <flux:button
-                            type="button"
-                            class="shrink-0"
-                            :disabled="($result['status'] ?? 'idle') === 'processing'"
-                        >
+                        <flux:button type="button" class="shrink-0"
+                            :disabled="($result['status'] ?? 'idle') === 'processing'">
                             +
                         </flux:button>
                     </flux:modal.trigger>
@@ -162,21 +162,15 @@
             <flux:field>
                 <flux:label>Source</flux:label>
                 <div class="flex gap-2">
-                    <button
-                        type="button"
+                    <button type="button"
                         class="rounded-md border px-3 py-2 text-sm {{ $mode === 'textarea' ? 'bg-muted' : '' }}"
-                        wire:click="$set('mode','textarea')"
-                        @disabled(($result['status'] ?? 'idle') === 'processing')
-                    >
+                        wire:click="$set('mode','textarea')" @disabled(($result['status'] ?? 'idle') === 'processing')>
                         Textarea
                     </button>
 
-                    <button
-                        type="button"
+                    <button type="button"
                         class="rounded-md border px-3 py-2 text-sm {{ $mode === 'csv' ? 'bg-muted' : '' }}"
-                        wire:click="$set('mode','csv')"
-                        @disabled(($result['status'] ?? 'idle') === 'processing')
-                    >
+                        wire:click="$set('mode','csv')" @disabled(($result['status'] ?? 'idle') === 'processing')>
                         CSV
                     </button>
                 </div>
@@ -189,12 +183,8 @@
                 <flux:field>
                     <flux:label>Emails (one per line, or comma-separated)</flux:label>
 
-                    <textarea
-                        rows="10"
-                        wire:model="textarea"
-                        class="w-full rounded-md border px-3 py-2 text-sm"
-                        @disabled(($result['status'] ?? 'idle') === 'processing')
-                    ></textarea>
+                    <textarea rows="10" wire:model="textarea" class="w-full rounded-md border px-3 py-2 text-sm"
+                        @disabled(($result['status'] ?? 'idle') === 'processing')></textarea>
 
                     @error('textarea')
                         <div class="text-sm text-red-600 mt-1">{{ $message }}</div>
@@ -212,20 +202,15 @@
                     <div class="mt-3" wire:loading wire:target="csv">
                         <div class="text-xs text-muted-foreground mb-1">Uploading file...</div>
                         <div class="h-2 w-full rounded bg-muted overflow-hidden">
-                            <div class="h-2 bg-foreground/60 animate-pulse" style="width: 100%"></div>
+                            <div class="h-2 bg-zinc-400 animate-pulse" style="width: 100%"></div>
                         </div>
                     </div>
                 </flux:field>
             @endif
 
             <div class="flex gap-2 items-center">
-                <button
-                    type="submit"
-                    class="rounded-md border px-4 py-2 text-sm"
-                    wire:loading.attr="disabled"
-                    wire:target="submit,csv"
-                    @disabled(($result['status'] ?? 'idle') === 'processing')
-                >
+                <button type="submit" class="rounded-md border px-4 py-2 text-sm" wire:loading.attr="disabled"
+                    wire:target="submit,csv" @disabled(($result['status'] ?? 'idle') === 'processing')>
                     <span wire:loading.remove wire:target="submit">Start Import</span>
                     <span wire:loading wire:target="submit">Starting...</span>
                 </button>
@@ -277,14 +262,9 @@
                 <div class="grid grid-cols-1 gap-4">
                     <div>
                         <label class="text-sm font-medium">Name</label>
-                        <input
-                            type="text"
-                            class="mt-1 w-full rounded-md border px-3 py-2 text-sm"
-                            wire:model.live="new_category_name"
-                            placeholder="e.g. Clothing-all"
-                            autocomplete="off"
-                            @disabled(($result['status'] ?? 'idle') === 'processing')
-                        />
+                        <input type="text" class="mt-1 w-full rounded-md border px-3 py-2 text-sm"
+                            wire:model.live="new_category_name" placeholder="e.g. Clothing-all" autocomplete="off"
+                            @disabled(($result['status'] ?? 'idle') === 'processing') />
                         @error('new_category_name')
                             <div class="text-sm text-red-600 mt-1">{{ $message }}</div>
                         @enderror
@@ -292,14 +272,9 @@
 
                     <div>
                         <label class="text-sm font-medium">Slug (optional)</label>
-                        <input
-                            type="text"
-                            class="mt-1 w-full rounded-md border px-3 py-2 text-sm"
-                            wire:model.live="new_category_slug"
-                            placeholder="Auto-generated if empty"
-                            autocomplete="off"
-                            @disabled(($result['status'] ?? 'idle') === 'processing')
-                        />
+                        <input type="text" class="mt-1 w-full rounded-md border px-3 py-2 text-sm"
+                            wire:model.live="new_category_slug" placeholder="Auto-generated if empty"
+                            autocomplete="off" @disabled(($result['status'] ?? 'idle') === 'processing') />
                         @error('new_category_slug')
                             <div class="text-sm text-red-600 mt-1">{{ $message }}</div>
                         @enderror
@@ -307,14 +282,9 @@
 
                     <div>
                         <label class="text-sm font-medium">Notes (optional)</label>
-                        <input
-                            type="text"
-                            class="mt-1 w-full rounded-md border px-3 py-2 text-sm"
-                            wire:model.live="new_category_notes"
-                            placeholder="Optional notes"
-                            autocomplete="off"
-                            @disabled(($result['status'] ?? 'idle') === 'processing')
-                        />
+                        <input type="text" class="mt-1 w-full rounded-md border px-3 py-2 text-sm"
+                            wire:model.live="new_category_notes" placeholder="Optional notes" autocomplete="off"
+                            @disabled(($result['status'] ?? 'idle') === 'processing') />
                         @error('new_category_notes')
                             <div class="text-sm text-red-600 mt-1">{{ $message }}</div>
                         @enderror
@@ -323,23 +293,14 @@
 
                 <div class="flex items-center justify-end gap-2">
                     <flux:modal.close>
-                        <flux:button
-                            variant="ghost"
-                            type="button"
-                            wire:click="resetCategoryForm"
-                            :disabled="($result['status'] ?? 'idle') === 'processing'"
-                        >
+                        <flux:button variant="ghost" type="button" wire:click="resetCategoryForm"
+                            :disabled="($result['status'] ?? 'idle') === 'processing'">
                             Cancel
                         </flux:button>
                     </flux:modal.close>
 
-                    <flux:button
-                        type="button"
-                        wire:click="createCategory"
-                        wire:loading.attr="disabled"
-                        wire:target="createCategory"
-                        :disabled="($result['status'] ?? 'idle') === 'processing'"
-                    >
+                    <flux:button type="button" wire:click="createCategory" wire:loading.attr="disabled"
+                        wire:target="createCategory" :disabled="($result['status'] ?? 'idle') === 'processing'">
                         <span wire:loading.remove wire:target="createCategory">Create</span>
                         <span wire:loading wire:target="createCategory">Creating...</span>
                     </flux:button>
