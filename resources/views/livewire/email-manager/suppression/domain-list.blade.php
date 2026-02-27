@@ -6,7 +6,7 @@
     <div class="grid gap-4 md:grid-cols-2">
         {{-- Add Multiple --}}
         <flux:card>
-            <flux:heading size="md">Add Domains / Extensions</flux:heading>
+            <flux:heading size="md">Add Domains / Extensions / Users</flux:heading>
 
             <div class="mt-4 space-y-3">
                 <flux:field>
@@ -14,6 +14,7 @@
                     <select wire:model.live="type" class="w-full rounded-md border px-3 py-2 text-sm">
                         <option value="domain">Domain (example.com)</option>
                         <option value="extension">Extension (.bd, .com.bd)</option>
+                        <option value="user">User (local-part) (pk_d@, pk.dutta@)</option>
                     </select>
                     <flux:error name="type" />
                 </flux:field>
@@ -22,13 +23,20 @@
                     <flux:label>Paste multiple (line break / comma / semicolon)</flux:label>
 
                     <textarea wire:model="domainsText" rows="8" class="w-full rounded-md border px-3 py-2 text-sm"
-                        placeholder="example.com
-gmail.com, yahoo.com; outlook.com"></textarea>
+                        placeholder=""></textarea>
 
                     <flux:error name="domainsText" />
+
                     <div class="text-xs text-muted-foreground mt-1">
-                        For extensions use: <span class="font-medium">.bd</span> or
-                        <span class="font-medium">.com.bd</span>
+                        @if (($type ?? 'domain') === 'extension')
+                            For extensions use: <span class="font-medium">.bd</span> or
+                            <span class="font-medium">.com.bd</span>
+                        @elseif (($type ?? 'domain') === 'user')
+                            For users use: <span class="font-medium">pk_d@</span> or
+                            <span class="font-medium">pk.dutta@</span> (blocks any domain)
+                        @else
+                            For domains use: <span class="font-medium">example.com</span> (exact match)
+                        @endif
                     </div>
                 </flux:field>
 
@@ -95,13 +103,21 @@ gmail.com, yahoo.com; outlook.com"></textarea>
                     </thead>
                     <tbody>
                         @forelse($items as $row)
+                            @php
+                                $t = $row->type ?? '';
+                            @endphp
                             <tr class="border-b">
                                 <td class="px-3 py-2">
                                     <input type="checkbox" value="{{ $row->id }}" wire:model="selected">
                                 </td>
 
                                 <td class="px-3 py-2">
-                                    <span class="inline-flex items-center rounded-md border px-2 py-0.5 text-xs">
+                                    <span
+                                        class="inline-flex items-center rounded-md border px-2 py-0.5 text-xs
+                                        @if ($t === 'domain') bg-blue-50 text-blue-700 border-blue-200
+                                        @elseif($t === 'extension') bg-emerald-50 text-emerald-700 border-emerald-200
+                                        @else bg-amber-50 text-amber-700 border-amber-200 @endif
+                                    ">
                                         {{ $row->type }}
                                     </span>
                                 </td>
@@ -133,6 +149,13 @@ gmail.com, yahoo.com; outlook.com"></textarea>
                     {{ $items->links() }}
                 </div>
             </div>
+
+            <div class="mt-2 text-xs text-muted-foreground">
+                Types:
+                <span class="font-medium">domain</span> = exact domain,
+                <span class="font-medium">extension</span> = ends-with,
+                <span class="font-medium">user</span> = local-part match (blocks any domain)
+            </div>
         </flux:card>
     </div>
 
@@ -147,12 +170,13 @@ gmail.com, yahoo.com; outlook.com"></textarea>
                         <option value="all">All (Domain contains + Extension ends-with)</option>
                         <option value="domain">Domain contains (ex: mail)</option>
                         <option value="extension">Extension ends-with (ex: .net, .com.bd)</option>
+                        <option value="user">User local-part contains (ex: pk_)</option>
                     </select>
                 </div>
 
                 <div class="flex-1">
                     <flux:input wire:model.live="emailSearch"
-                        placeholder="Search domains from Emails (ex: .net or mail)..." />
+                        placeholder="Search from Emails (domain/local-part)..." />
                 </div>
 
                 <div class="text-sm text-muted-foreground whitespace-nowrap">
@@ -184,7 +208,7 @@ gmail.com, yahoo.com; outlook.com"></textarea>
                     <button type="button" class="rounded-md border px-3 py-2 text-sm"
                         wire:click="openDeleteEmailsModal" wire:loading.attr="disabled"
                         @if (empty($emailSelected)) disabled @endif
-                        title="Deletes emails from database for selected domains">
+                        title="Deletes emails from database for selected domains/local-parts">
                         Delete selected emails
                     </button>
                 </div>
@@ -195,24 +219,41 @@ gmail.com, yahoo.com; outlook.com"></textarea>
                     <thead class="text-left">
                         <tr class="border-b">
                             <th class="px-3 py-2 w-10"></th>
-                            <th class="px-3 py-2 font-medium">Domain (from Emails)</th>
+                            <th class="px-3 py-2 font-medium">
+                                @if (($emailSearchMode ?? 'all') === 'user')
+                                    User (local-part) (from Emails)
+                                @else
+                                    Domain (from Emails)
+                                @endif
+                            </th>
                         </tr>
                     </thead>
                     <tbody>
                         @forelse($emailDomains as $row)
+                            @php
+                                // keep your variable name $emailDomains for backward compatibility.
+                                // for user-mode, your Livewire should provide "local_part" (alias) on each row.
+                                $val = ($emailSearchMode ?? 'all') === 'user'
+                                    ? ($row->local_part ?? $row->domain ?? '')
+                                    : ($row->domain ?? '');
+                            @endphp
                             <tr class="border-b">
                                 <td class="px-3 py-2">
-                                    <input type="checkbox" value="{{ $row->domain }}" wire:model="emailSelected">
+                                    <input type="checkbox" value="{{ $val }}" wire:model="emailSelected">
                                 </td>
 
                                 <td class="px-3 py-2">
-                                    <span class="font-medium">{{ $row->domain }}</span>
+                                    <span class="font-medium">{{ $val }}</span>
                                 </td>
                             </tr>
                         @empty
                             <tr>
                                 <td colspan="2" class="px-3 py-4 text-center text-muted-foreground">
-                                    No matched domains from emails.
+                                    @if (($emailSearchMode ?? 'all') === 'user')
+                                        No matched users (local-part) from emails.
+                                    @else
+                                        No matched domains from emails.
+                                    @endif
                                 </td>
                             </tr>
                         @endforelse
@@ -225,9 +266,14 @@ gmail.com, yahoo.com; outlook.com"></textarea>
             </div>
 
             <div class="text-xs text-muted-foreground">
-                Note: This section searches <span class="font-medium">email_addresses.domain</span> and deletes all
-                emails
-                under the selected domains from the database.
+                Note: This section searches
+                @if (($emailSearchMode ?? 'all') === 'user')
+                    <span class="font-medium">email_addresses.local_part</span> and deletes all emails under selected
+                    local-parts from the database.
+                @else
+                    <span class="font-medium">email_addresses.domain</span> and deletes all emails under selected
+                    domains from the database.
+                @endif
             </div>
         </div>
     </flux:card>
@@ -247,7 +293,12 @@ gmail.com, yahoo.com; outlook.com"></textarea>
                     <span class="font-semibold text-foreground">
                         {{ number_format($confirmDeleteEmailCount ?? 0) }}
                     </span>
-                    email(s) from the database for the selected domains.
+                    email(s) from the database for the selected
+                    @if (($emailSearchMode ?? 'all') === 'user')
+                        users (local-part).
+                    @else
+                        domains.
+                    @endif
                     <div class="mt-1">
                         This action cannot be undone.
                     </div>

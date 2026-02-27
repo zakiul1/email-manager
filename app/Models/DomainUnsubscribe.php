@@ -7,9 +7,15 @@ use Illuminate\Database\Eloquent\Model;
 
 class DomainUnsubscribe extends Model
 {
+    /**
+     * type values:
+     * - domain     => exact domain match (gmail.com)
+     * - extension  => suffix match (.bd, .com.bd)
+     * - user       => local-part match (pk_d, pk.dutta) [input can be pk_d@]
+     */
     protected $fillable = [
-        'type',   // domain | extension
-        'value',  // gmail.com | .bd | .com.bd
+        'type',
+        'value',
         'reason',
         'user_id',
     ];
@@ -18,8 +24,10 @@ class DomainUnsubscribe extends Model
      * Normalize before save:
      * - lowercase
      * - remove spaces
-     * - remove leading @ for domains
-     * - ensure extension starts with dot (.)
+     * - remove leading @
+     * - domain: remove leading dot (.) and trailing @
+     * - extension: enforce leading dot (.)
+     * - user: keep only local-part (remove trailing @ if provided)
      */
     protected static function booted(): void
     {
@@ -29,18 +37,36 @@ class DomainUnsubscribe extends Model
             $value = mb_strtolower(trim((string) $m->value));
             $value = preg_replace('/\s+/', '', $value) ?? $value;
 
-            // domain: allow "gmail.com" or "@gmail.com"
+            // common cleanup
+            $value = ltrim($value, '@');
+
             if ($m->type === 'domain') {
-                $value = ltrim($value, '@');
-                $value = ltrim($value, '.'); // avoid ".gmail.com" mistakes
+                // allow "gmail.com" or "@gmail.com" or ".gmail.com"
+                $value = ltrim($value, '.');
+                // if someone typed gmail.com@, remove trailing @
+                $value = rtrim($value, '@');
             }
 
-            // extension: enforce leading dot
             if ($m->type === 'extension') {
-                $value = ltrim($value, '@'); // just in case
-                if ($value !== '' && $value[0] !== '.') {
+                // allow ".bd" or "bd" or "@bd" or " .com.bd "
+                $value = rtrim($value, '@');
+                $value = ltrim($value, '.');
+                if ($value !== '') {
                     $value = '.' . $value;
                 }
+            }
+
+            if ($m->type === 'user') {
+                // allow "pk_d" or "pk_d@" or "@pk_d@" etc.
+                $value = rtrim($value, '@');
+
+                // if someone pasted a full email, keep only local-part (before @)
+                if (str_contains($value, '@')) {
+                    $value = explode('@', $value, 2)[0];
+                }
+
+                // also avoid accidental leading dots
+                $value = ltrim($value, '.');
             }
 
             $m->value = $value;
@@ -50,7 +76,7 @@ class DomainUnsubscribe extends Model
     public static function normalizeType(?string $type): string
     {
         $t = mb_strtolower(trim((string) $type));
-        return in_array($t, ['domain', 'extension'], true) ? $t : 'domain';
+        return in_array($t, ['domain', 'extension', 'user'], true) ? $t : 'domain';
     }
 
     /**
@@ -64,6 +90,11 @@ class DomainUnsubscribe extends Model
     public function scopeExtensions(Builder $q): Builder
     {
         return $q->where('type', 'extension');
+    }
+
+    public function scopeUsers(Builder $q): Builder
+    {
+        return $q->where('type', 'user');
     }
 
     /**
@@ -92,7 +123,6 @@ class DomainUnsubscribe extends Model
         }
 
         // 2) extension match: check suffixes
-        // Example: domain = "abc.com.bd" -> suffixes: ".bd", ".com.bd"
         $parts = explode('.', $d);
         if (count($parts) < 2) {
             return false;
@@ -106,6 +136,38 @@ class DomainUnsubscribe extends Model
         return self::query()
             ->where('type', 'extension')
             ->whereIn('value', $suffixes)
+            ->exists();
+    }
+
+    /**
+     * Helper: check if a local-part (username) is blocked
+     * - type=user, value=local_part
+     * - input examples: "pk_d" or "pk_d@" or full email "pk_d@gmail.com"
+     */
+    public static function isBlockedUser(string $localPartOrEmail): bool
+    {
+        $v = mb_strtolower(trim($localPartOrEmail));
+        $v = preg_replace('/\s+/', '', $v) ?? $v;
+
+        if ($v === '') {
+            return false;
+        }
+
+        $v = ltrim($v, '@');
+        $v = rtrim($v, '@');
+
+        // if full email provided, keep only local part
+        if (str_contains($v, '@')) {
+            $v = explode('@', $v, 2)[0];
+        }
+
+        if ($v === '') {
+            return false;
+        }
+
+        return self::query()
+            ->where('type', 'user')
+            ->where('value', $v)
             ->exists();
     }
 }

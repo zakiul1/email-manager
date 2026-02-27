@@ -74,7 +74,7 @@
                         @endif
                     </div>
 
-                    {{-- ✅ Progress bar (FIXED) --}}
+                    {{-- ✅ Progress bar --}}
                     <div class="mt-3 h-2 w-full rounded bg-white/60 overflow-hidden border">
                         <div class="h-2 {{ $barColor }}" style="width: {{ $percent }}%"></div>
                     </div>
@@ -114,7 +114,7 @@
             @endif
         </div>
 
-        {{-- ✅ THIS is the key: run chunk processing automatically --}}
+        {{-- ✅ Run chunk processing automatically --}}
         @if (($result['status'] ?? 'idle') === 'processing')
             <div class="hidden" wire:poll.500ms="processChunk"></div>
         @endif
@@ -221,7 +221,61 @@
             </div>
         </form>
 
-        {{-- Invalid Preview --}}
+        {{-- ✅ Not Inserted Emails (Invalid + Duplicate + Blocked) --}}
+        @if (!empty($failurePreview))
+            <div class="mt-8">
+                <div class="flex items-center justify-between gap-3">
+                    <flux:heading size="sm">
+                        Not Inserted Emails (first {{ count($failurePreview) }})
+                    </flux:heading>
+
+                    <button type="button" wire:click="downloadFailures"
+                        class="rounded-md border px-3 py-2 text-xs bg-white hover:bg-muted">
+                        Download Full List (CSV)
+                    </button>
+                </div>
+
+                <div class="mt-3 overflow-x-auto rounded-md border bg-white">
+                    <table class="min-w-full text-sm">
+                        <thead class="text-left">
+                            <tr class="border-b">
+                                <th class="px-4 py-3 font-medium">Type</th>
+                                <th class="px-4 py-3 font-medium">Email</th>
+                                <th class="px-4 py-3 font-medium">Reason</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach ($failurePreview as $row)
+                                <tr class="border-b">
+                                    <td class="px-4 py-3">
+                                        @php
+                                            $t = $row['type'] ?? '';
+                                        @endphp
+                                        <span
+                                            class="inline-flex items-center rounded px-2 py-1 text-xs font-medium
+                                            @if ($t === 'invalid') bg-red-50 text-red-700 border border-red-200
+                                            @elseif($t === 'duplicate') bg-amber-50 text-amber-700 border border-amber-200
+                                            @else bg-zinc-50 text-zinc-700 border border-zinc-200 @endif
+                                        ">
+                                            {{ ucfirst($t) }}
+                                        </span>
+                                    </td>
+                                    <td class="px-4 py-3">{{ $row['email'] ?? '' }}</td>
+                                    <td class="px-4 py-3">{{ $row['reason'] ?? '' }}</td>
+                                </tr>
+                            @endforeach
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="mt-2 text-xs text-muted-foreground">
+                    This list includes invalid format, duplicates, and blocked/suppressed emails.
+                </div>
+            </div>
+        @endif
+
+        {{-- (Optional) keep old invalid-only table if you still want it.
+            If you don’t want duplication, you can remove this whole block. --}}
         @if (!empty($invalidPreview))
             <div class="mt-6">
                 <flux:heading size="sm">Invalid Emails Preview (first {{ count($invalidPreview) }})</flux:heading>

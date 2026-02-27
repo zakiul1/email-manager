@@ -77,9 +77,14 @@
                             <td class="px-4 py-3 text-right">
                                 <div class="inline-flex items-center gap-1">
                                     {{-- View --}}
-                                    <flux:button size="sm" variant="ghost"
+                                    <flux:button
+                                        size="sm"
+                                        variant="ghost"
                                         :href="route('email-manager.emails', ['category_id' => $category->id])"
-                                        wire:navigate title="View" class="cursor-pointer">
+                                        wire:navigate
+                                        title="View"
+                                        class="cursor-pointer"
+                                    >
                                         <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18"
                                             viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                                             stroke-linecap="round" stroke-linejoin="round">
@@ -88,10 +93,32 @@
                                         </svg>
                                     </flux:button>
 
+                                    {{-- ✅ NEW: Upload (go to Import Upload page with category auto-selected) --}}
+                                    <flux:button
+                                        size="sm"
+                                        variant="ghost"
+                                        :href="route('email-manager.imports.upload', ['category_id' => $category->id])"
+                                        wire:navigate
+                                        title="Upload emails to this category"
+                                        class="cursor-pointer"
+                                    >
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18"
+                                            viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                                            stroke-linecap="round" stroke-linejoin="round">
+                                            <path d="M12 3v12"></path>
+                                            <path d="m7 8 5-5 5 5"></path>
+                                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                        </svg>
+                                    </flux:button>
+
                                     {{-- Download --}}
-                                    <flux:button size="sm" variant="ghost"
-                                        :href="route('email-manager.categories.download', $category)" title="Download"
-                                        class="cursor-pointer">
+                                    <flux:button
+                                        size="sm"
+                                        variant="ghost"
+                                        :href="route('email-manager.categories.download', $category)"
+                                        title="Download"
+                                        class="cursor-pointer"
+                                    >
                                         <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18"
                                             viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                                             stroke-linecap="round" stroke-linejoin="round">
@@ -102,9 +129,14 @@
                                     </flux:button>
 
                                     {{-- Edit --}}
-                                    <flux:button size="sm" variant="ghost"
-                                        :href="route('email-manager.categories.edit', $category)" wire:navigate
-                                        title="Edit" class="cursor-pointer">
+                                    <flux:button
+                                        size="sm"
+                                        variant="ghost"
+                                        :href="route('email-manager.categories.edit', $category)"
+                                        wire:navigate
+                                        title="Edit"
+                                        class="cursor-pointer"
+                                    >
                                         <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18"
                                             viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                                             stroke-linecap="round" stroke-linejoin="round">
@@ -115,9 +147,14 @@
 
                                     {{-- Delete (opens modal) --}}
                                     <flux:modal.trigger name="delete-category">
-                                        <flux:button size="sm" variant="ghost" type="button"
-                                            wire:click="confirmDelete({{ $category->id }})" title="Delete"
-                                            class="cursor-pointer">
+                                        <flux:button
+                                            size="sm"
+                                            variant="ghost"
+                                            type="button"
+                                            wire:click="confirmDelete({{ $category->id }})"
+                                            title="Delete"
+                                            class="cursor-pointer"
+                                        >
                                             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18"
                                                 viewBox="0 0 24 24" fill="none" stroke="currentColor"
                                                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round">

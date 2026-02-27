@@ -18,10 +18,13 @@ use App\Livewire\EmailManager\Suppression\DomainList;
 
 use App\Livewire\EmailManager\Emails\Index as EmailsIndex;
 
+// Exports (Direct)
 use App\Livewire\EmailManager\Exports\Create as ExportCreate;
-use App\Livewire\EmailManager\Exports\Index as ExportIndex;
+// (Optional) keep old index if you still want it later
+// use App\Livewire\EmailManager\Exports\Index as ExportIndex;
 
 use App\Http\Controllers\EmailManager\CategoryDownloadController;
+use App\Http\Controllers\EmailManager\DirectExportDownloadController;
 
 Route::middleware(['auth', 'verified'])->group(function () {
 
@@ -44,8 +47,8 @@ Route::middleware(['auth', 'verified'])->group(function () {
         ->name('email-manager.categories.edit');
 
     // ✅ Category-wise download
-Route::get('email-manager/categories/{category}/download', [CategoryDownloadController::class, 'download'])
-    ->name('email-manager.categories.download');
+    Route::get('email-manager/categories/{category}/download', [CategoryDownloadController::class, 'download'])
+        ->name('email-manager.categories.download');
 
     // -------------------------
     // Imports
@@ -69,15 +72,34 @@ Route::get('email-manager/categories/{category}/download', [CategoryDownloadCont
         ->name('email-manager.emails');
 
     // -------------------------
-    // Exports
+    // Exports (DIRECT)
     // -------------------------
-    Route::get('email-manager/exports', ExportIndex::class)
+
+    /**
+     * ✅ Sidebar "Exports" should open the export form directly
+     * So we point /exports to the form component.
+     */
+    Route::get('email-manager/exports', ExportCreate::class)
         ->name('email-manager.exports');
 
+    /**
+     * ✅ Direct download endpoint (no create-export record)
+     * Livewire form will redirect user to this URL with query params.
+     */
+    Route::get('email-manager/exports/download', [DirectExportDownloadController::class, 'download'])
+        ->name('email-manager.exports.download');
+
+    /**
+     * (Optional) Keep old Create route to avoid breaking old links.
+     * You can remove later after updating sidebar links.
+     */
     Route::get('email-manager/exports/create', ExportCreate::class)
         ->name('email-manager.exports.create');
 
-    // ✅ Secure download (private storage/app files)
+    /**
+     * (Optional) Keep old secure download for stored exports
+     * If you no longer use Export records, you can delete this route later.
+     */
     Route::get('email-manager/exports/{export}/download-file', function (Export $export) {
         abort_unless($export->user_id === auth()->id(), 403);
 

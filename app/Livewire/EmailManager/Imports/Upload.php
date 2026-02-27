@@ -47,7 +47,11 @@ class Upload extends Component
         'percent' => 0,
     ];
 
-    public array $invalidPreview = []; // [{raw,email,reason}...]
+    /**
+     * UI preview lists
+     */
+    public array $invalidPreview = [];  // kept for backward compatibility
+    public array $failurePreview = [];  // [{type,email,reason,raw?}...]
 
     // Chunked upload tracking
     public ?string $upload_id = null;
@@ -57,6 +61,22 @@ class Upload extends Component
 
     // Cache TTL in seconds (2 hours)
     private int $ttlSeconds = 7200;
+
+    // Preview limit for UI table
+    private int $previewLimit = 200;
+
+    /**
+     * ✅ Auto-select category by query param (from Categories Upload button)
+     * NOTE: You had this method duplicated before; keep only ONE.
+     */
+    public function mount(): void
+    {
+        $categoryId = (int) request()->query('category_id', 0);
+
+        if ($categoryId > 0 && Category::query()->whereKey($categoryId)->exists()) {
+            $this->category_id = $categoryId;
+        }
+    }
 
     private function progressKey(string $uploadId): string
     {
@@ -71,6 +91,11 @@ class Upload extends Component
     private function tempPath(string $uploadId): string
     {
         return "tmp_uploads/{$uploadId}.txt";
+    }
+
+    private function failurePath(string $uploadId): string
+    {
+        return "tmp_uploads/{$uploadId}_failures.csv";
     }
 
     /**
@@ -159,6 +184,7 @@ class Upload extends Component
     {
         // reset preview and result
         $this->invalidPreview = [];
+        $this->failurePreview = [];
         $this->result = [
             'total' => 0,
             'processed' => 0,
@@ -204,13 +230,27 @@ class Upload extends Component
             $normalized[] = $email;
         }
 
-        // De-dupe inside same upload
-        $normalized = array_values(array_unique($normalized));
-
         if (count($normalized) === 0) {
             $this->dispatch('toast', type: 'warning', message: 'No emails found to upload.', timeout: 5000);
             return;
         }
+
+        // Detect duplicates inside same upload (so we can show them as "not inserted")
+        $seen = [];
+        $deduped = [];
+        $inputDuplicates = [];
+
+        foreach ($normalized as $email) {
+            if (isset($seen[$email])) {
+                $inputDuplicates[] = $email;
+                continue;
+            }
+            $seen[$email] = true;
+            $deduped[] = $email;
+        }
+
+        // ✅ NEW: Shuffle the email order so validation/import runs randomly
+        shuffle($deduped);
 
         // Create upload_id and save temp file
         $uploadId = (string) Str::uuid();
@@ -221,14 +261,18 @@ class Upload extends Component
             Storage::makeDirectory('tmp_uploads');
         }
 
-        Storage::put($this->tempPath($uploadId), implode("\n", $normalized));
+        // Write emails for processing
+        Storage::put($this->tempPath($uploadId), implode("\n", $deduped));
+
+        // Prepare failure CSV with header
+        Storage::put($this->failurePath($uploadId), "type,email,reason\n");
 
         // Initialize progress in cache
         $progress = [
             'status' => 'processing',
             'message' => null,
             'category_id' => (int) $this->category_id,
-            'total' => count($normalized),
+            'total' => count($deduped),
             'processed' => 0,
             'valid' => 0,
             'inserted' => 0,
@@ -237,7 +281,15 @@ class Upload extends Component
             'invalid' => 0,
             'cursor' => 0, // line number cursor
             'invalidPreview' => [],
+            'failurePreview' => [],
         ];
+
+        // If duplicates exist in input, count + log them now (they will never reach DB stage)
+        foreach ($inputDuplicates as $dupEmail) {
+            $progress['duplicates'] = (int) ($progress['duplicates'] ?? 0) + 1;
+            $this->pushFailurePreview($progress, 'duplicate', $dupEmail, 'Duplicate in uploaded list');
+            $this->appendFailureCsv($uploadId, 'duplicate', $dupEmail, 'Duplicate in uploaded list');
+        }
 
         Cache::put($this->progressKey($uploadId), $progress, $this->ttlSeconds);
 
@@ -266,8 +318,9 @@ class Upload extends Component
             return;
         }
 
-        // Keep invalid preview small for UI
+        // Backward compatible + new
         $this->invalidPreview = $p['invalidPreview'] ?? [];
+        $this->failurePreview = $p['failurePreview'] ?? [];
 
         $total = (int) ($p['total'] ?? 0);
         $processed = (int) ($p['processed'] ?? 0);
@@ -285,6 +338,25 @@ class Upload extends Component
             'message' => $p['message'] ?? null,
             'percent' => $percent,
         ];
+    }
+
+    /**
+     * Download full "not inserted" list (CSV).
+     */
+    public function downloadFailures()
+    {
+        if (!$this->upload_id) {
+            $this->dispatch('toast', type: 'warning', message: 'No upload found.', timeout: 4000);
+            return null;
+        }
+
+        $path = $this->failurePath($this->upload_id);
+        if (!Storage::exists($path)) {
+            $this->dispatch('toast', type: 'warning', message: 'Failure list not found.', timeout: 4000);
+            return null;
+        }
+
+        return Storage::download($path, "upload_failures_{$this->upload_id}.csv");
     }
 
     /**
@@ -308,14 +380,52 @@ class Upload extends Component
 
         // Extension match (suffix)
         foreach ($blockedExtensions as $ext) {
-            if ($ext === '')
+            if ($ext === '') {
                 continue;
+            }
             if (str_ends_with($d, $ext)) {
                 return true;
             }
         }
 
         return false;
+    }
+
+    private function domainUnsubscribeReason(string $domain, array $blockedExactDomains, array $blockedExtensions): ?string
+    {
+        $d = mb_strtolower(trim($domain));
+        $d = ltrim($d, '@');
+
+        if ($d === '') {
+            return null;
+        }
+
+        if (isset($blockedExactDomains[$d])) {
+            return 'Blocked: domain unsubscribed (exact)';
+        }
+
+        foreach ($blockedExtensions as $ext) {
+            if ($ext === '') {
+                continue;
+            }
+            if (str_ends_with($d, $ext)) {
+                return "Blocked: domain unsubscribed (extension {$ext})";
+            }
+        }
+
+        return null;
+    }
+
+    private function userUnsubscribeReason(string $localPart, array $blockedUsers): ?string
+    {
+        $l = mb_strtolower(trim($localPart));
+        if ($l === '') {
+            return null;
+        }
+        if (isset($blockedUsers[$l])) {
+            return 'Blocked: user mail unsubscribed';
+        }
+        return null;
     }
 
     /**
@@ -395,20 +505,52 @@ class Upload extends Component
                 Cache::put($this->progressKey($uploadId), $p, $this->ttlSeconds);
                 Storage::delete($filePath);
 
-                $this->dispatch('toast', type: 'success', timeout: 6000, message: "Upload completed. Inserted {$p['inserted']}, duplicates {$p['duplicates']}, invalid {$p['invalid']}.");
+                $this->dispatch(
+                    'toast',
+                    type: 'success',
+                    timeout: 6000,
+                    message: "Upload completed. Inserted {$p['inserted']}, duplicates {$p['duplicates']}, suppressed {$p['suppressed']}, invalid {$p['invalid']}."
+                );
+
                 $this->refreshProgress();
                 return;
             }
 
-            // Build domain list for this chunk
+            // Build domain + local_part lists for this chunk
             $domains = [];
+            $locals = [];
+
             foreach ($emails as $e) {
                 $parts = explode('@', $e, 2);
-                if (count($parts) === 2 && $parts[1] !== '') {
-                    $domains[] = trim($parts[1]);
+                if (count($parts) === 2) {
+                    $lp = trim(mb_strtolower($parts[0]));
+                    $dm = trim(mb_strtolower($parts[1]));
+                    if ($lp !== '') {
+                        $locals[] = $lp;
+                    }
+                    if ($dm !== '') {
+                        $domains[] = $dm;
+                    }
                 }
             }
+
             $domains = array_values(array_unique(array_filter($domains)));
+            $locals  = array_values(array_unique(array_filter($locals)));
+
+            /**
+             * NEW: User (local-part) Unsubscribes
+             * type=user, value=local_part
+             */
+            $blockedUsers = [];
+            if (!empty($locals)) {
+                $blocked = DomainUnsubscribe::query()
+                    ->where('type', 'user')
+                    ->whereIn('value', $locals)
+                    ->pluck('value')
+                    ->all();
+
+                $blockedUsers = array_fill_keys($blocked, true);
+            }
 
             // Domain Suppression (existing feature)
             $suppressedDomains = [];
@@ -422,7 +564,7 @@ class Upload extends Component
             }
 
             /**
-             * NEW: Domain Unsubscribes (domain + extension)
+             * Domain Unsubscribes (domain + extension)
              * - exact match for domains in this chunk
              * - load all extensions once per chunk
              */
@@ -444,10 +586,12 @@ class Upload extends Component
             // normalize extensions to lowercase and ensure starting dot
             $blockedExtensions = array_values(array_unique(array_map(function ($v) {
                 $v = mb_strtolower(trim((string) $v));
-                if ($v === '')
+                if ($v === '') {
                     return '';
-                if ($v[0] !== '.')
+                }
+                if ($v[0] !== '.') {
                     $v = '.' . ltrim($v, '.');
+                }
                 return $v;
             }, $blockedExtensions)));
 
@@ -459,39 +603,71 @@ class Upload extends Component
             $invalid = 0;
 
             // Use transaction per chunk (safer + consistent)
-            DB::transaction(function () use ($emails, $categoryId, $suppressedDomains, $blockedExactDomains, $blockedExtensions, &$valid, &$inserted, &$duplicates, &$suppressed, &$invalid, &$p) {
+            DB::transaction(function () use (
+                $emails,
+                $categoryId,
+                $suppressedDomains,
+                $blockedExactDomains,
+                $blockedExtensions,
+                $blockedUsers,
+                &$valid,
+                &$inserted,
+                &$duplicates,
+                &$suppressed,
+                &$invalid,
+                &$p,
+                $uploadId
+            ) {
                 foreach ($emails as $email) {
                     $raw = $email;
 
                     if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
                         $invalid++;
                         $this->pushInvalidPreview($p, $raw, $email, 'Invalid format');
+                        $this->pushFailurePreview($p, 'invalid', $email, 'Invalid format', $raw);
+                        $this->appendFailureCsv($uploadId, 'invalid', $email, 'Invalid format');
                         continue;
                     }
 
                     [$local, $domain] = explode('@', $email, 2);
-                    $local = trim($local);
-                    $domain = trim($domain);
+                    $local = trim(mb_strtolower($local));
+                    $domain = trim(mb_strtolower($domain));
 
                     if ($local === '' || $domain === '') {
                         $invalid++;
                         $this->pushInvalidPreview($p, $raw, $email, 'Invalid parts');
+                        $this->pushFailurePreview($p, 'invalid', $email, 'Invalid parts', $raw);
+                        $this->appendFailureCsv($uploadId, 'invalid', $email, 'Invalid parts');
                         continue;
                     }
 
                     /**
-                     * NEW: Domain Unsubscribes check FIRST (so it never inserts anywhere)
-                     * - exact domain
-                     * - extension suffix match
+                     * NEW: User mail unsubscribes (local-part block)
+                     * Example: pk_d@ blocks pk_d@anydomain.com
                      */
-                    if ($this->isDomainUnsubscribed($domain, $blockedExactDomains, $blockedExtensions)) {
+                    $userReason = $this->userUnsubscribeReason($local, $blockedUsers);
+                    if ($userReason !== null) {
                         $suppressed++;
+                        $this->pushFailurePreview($p, 'blocked', $email, $userReason, $raw);
+                        $this->appendFailureCsv($uploadId, 'blocked', $email, $userReason);
+                        continue;
+                    }
+
+                    // Domain Unsubscribes check (domain + extension)
+                    $unsubReason = $this->domainUnsubscribeReason($domain, $blockedExactDomains, $blockedExtensions);
+                    if ($unsubReason !== null) {
+                        $suppressed++;
+                        $this->pushFailurePreview($p, 'blocked', $email, $unsubReason, $raw);
+                        $this->appendFailureCsv($uploadId, 'blocked', $email, $unsubReason);
                         continue;
                     }
 
                     // Existing: domain-level suppression
                     if (isset($suppressedDomains[$domain])) {
                         $suppressed++;
+                        $reason = 'Blocked: domain suppressed';
+                        $this->pushFailurePreview($p, 'blocked', $email, $reason, $raw);
+                        $this->appendFailureCsv($uploadId, 'blocked', $email, $reason);
                         continue;
                     }
 
@@ -512,12 +688,15 @@ class Upload extends Component
 
                     if ($isGloballySuppressed) {
                         $suppressed++;
+                        $reason = 'Blocked: globally suppressed';
+                        $this->pushFailurePreview($p, 'blocked', $email, $reason, $raw);
+                        $this->appendFailureCsv($uploadId, 'blocked', $email, $reason);
                         continue;
                     }
 
                     $valid++;
 
-                    // ✅ Same category duplicate rule:
+                    // Same category duplicate rule:
                     $exists = DB::table('category_email')
                         ->where('category_id', $categoryId)
                         ->where('email_address_id', $emailAddress->id)
@@ -525,6 +704,9 @@ class Upload extends Component
 
                     if ($exists) {
                         $duplicates++;
+                        $reason = 'Duplicate: already exists in this category';
+                        $this->pushFailurePreview($p, 'duplicate', $email, $reason, $raw);
+                        $this->appendFailureCsv($uploadId, 'duplicate', $email, $reason);
                         continue;
                     }
 
@@ -611,6 +793,49 @@ class Upload extends Component
             'email' => $email,
             'reason' => $reason,
         ];
+    }
+
+    private function pushFailurePreview(array &$progress, string $type, string $email, string $reason, ?string $raw = null): void
+    {
+        if (!isset($progress['failurePreview']) || !is_array($progress['failurePreview'])) {
+            $progress['failurePreview'] = [];
+        }
+
+        if (count($progress['failurePreview']) >= $this->previewLimit) {
+            return;
+        }
+
+        $row = [
+            'type' => $type,
+            'email' => $email,
+            'reason' => $reason,
+        ];
+
+        if ($raw !== null) {
+            $row['raw'] = $raw;
+        }
+
+        $progress['failurePreview'][] = $row;
+    }
+
+    private function appendFailureCsv(string $uploadId, string $type, string $email, string $reason): void
+    {
+        $path = $this->failurePath($uploadId);
+
+        // ensure file exists (header already written in submit(), but be safe)
+        if (!Storage::exists($path)) {
+            Storage::put($path, "type,email,reason\n");
+        }
+
+        $abs = Storage::path($path);
+        $fh = @fopen($abs, 'a');
+        if (!$fh) {
+            return;
+        }
+
+        // fputcsv will escape commas/quotes/newlines
+        fputcsv($fh, [$type, $email, $reason]);
+        fclose($fh);
     }
 
     private function parseTextarea(string $text): array

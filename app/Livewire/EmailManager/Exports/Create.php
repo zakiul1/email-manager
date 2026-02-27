@@ -2,9 +2,7 @@
 
 namespace App\Livewire\EmailManager\Exports;
 
-use App\Jobs\ProcessExport;
 use App\Models\Category;
-use App\Models\Export;
 use Livewire\Component;
 
 class Create extends Component
@@ -25,27 +23,29 @@ class Create extends Component
             'category_id' => 'nullable|integer',
             'domain' => 'nullable|string|max:255',
             'valid' => 'required|in:all,valid,invalid',
+            'exclude_global_suppression' => 'boolean',
+            'exclude_domain_unsubscribes' => 'boolean',
         ]);
 
-        $filters = [
-            'category_id' => $this->category_id,
-            'domain' => $this->domain !== '' ? $this->domain : null,
+        // clean domain
+        $domain = trim(mb_strtolower($this->domain));
+        $domain = $domain !== '' ? $domain : null;
+
+        // Build query params for direct download endpoint
+        $params = [
+            'format' => $this->format,
+            'category_id' => $this->category_id > 0 ? $this->category_id : null,
+            'domain' => $domain,
             'valid' => $this->valid,
-            'exclude_global_suppression' => $this->exclude_global_suppression,
-            'exclude_domain_unsubscribes' => $this->exclude_domain_unsubscribes,
+            'exclude_global_suppression' => $this->exclude_global_suppression ? 1 : 0,
+            'exclude_domain_unsubscribes' => $this->exclude_domain_unsubscribes ? 1 : 0,
         ];
 
-        $export = Export::create([
-            'user_id' => auth()->id(),
-            'category_id' => $this->category_id ?: null,
-            'format' => $this->format,
-            'status' => 'queued',
-            'filters' => $filters,
-        ]);
+        // Remove null values so URL is clean
+        $params = array_filter($params, fn ($v) => $v !== null);
 
-        ProcessExport::dispatch($export->id);
-
-        $this->redirect(route('email-manager.exports'), navigate: true);
+        // Redirect browser to download URL -> download starts instantly
+        $this->redirect(route('email-manager.exports.download', $params), navigate: false);
     }
 
     public function render()

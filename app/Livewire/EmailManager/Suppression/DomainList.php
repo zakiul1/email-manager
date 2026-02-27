@@ -22,6 +22,7 @@ class DomainList extends Component
      * Add mode + main list filter
      * - domain: exact domain match (gmail.com)
      * - extension: suffix match (.bd / .com.bd)
+     * - user: local-part match (pk_d / pk_d@ / pk.dutta@)
      */
     public string $type = 'domain';
 
@@ -37,15 +38,14 @@ class DomainList extends Component
 
     /**
      * Bottom Global Search (from EMAILS table)
-     * Search domains from email_addresses and allow bulk DELETE emails from DB.
+     * Search domains OR local-parts from email_addresses and allow bulk DELETE emails from DB.
      */
-    public string $emailSearchMode = 'all'; // all|domain|extension
+    public string $emailSearchMode = 'all'; // all|domain|extension|user
     public string $emailSearch = '';
-    public array $emailSelected = []; // selected domains (strings)
+    public array $emailSelected = []; // selected values (strings): domains OR local_parts
 
     /**
      * Delete confirm modal state for deleting emails
-     * (Renamed to avoid conflict with method name)
      */
     public bool $showDeleteEmailsModal = false;
     public int $confirmDeleteEmailCount = 0;
@@ -71,10 +71,10 @@ class DomainList extends Component
     private function parseValues(string $text, string $type): array
     {
         $text = (string) $text;
-
         $parts = preg_split('/[\r\n,;]+/', $text) ?: [];
 
         $out = [];
+
         foreach ($parts as $p) {
             $v = mb_strtolower(trim((string) $p));
             if ($v === '') {
@@ -86,28 +86,46 @@ class DomainList extends Component
 
             if ($type === 'domain') {
                 $v = ltrim($v, '.');
-            } else {
+                $v = rtrim($v, '@');
+            } elseif ($type === 'extension') {
+                $v = rtrim($v, '@');
                 $v = ltrim($v, '.');
-                $v = '.' . $v;
+                if ($v !== '') {
+                    $v = '.' . $v;
+                }
+            } else { // user
+                // allow "pk_d@" or "pk_d" or "@pk_d@"
+                $v = rtrim($v, '@');
+
+                // if someone pasted a full email, keep only local-part
+                if (str_contains($v, '@')) {
+                    $v = explode('@', $v, 2)[0];
+                }
+
+                $v = ltrim($v, '.');
+            }
+
+            if ($v === '') {
+                continue;
             }
 
             $out[] = $v;
         }
 
         $out = array_values(array_unique($out));
-        $out = array_values(array_filter($out, fn($x) => mb_strlen($x) <= 255));
+        $out = array_values(array_filter($out, fn ($x) => mb_strlen($x) <= 255));
 
         return $out;
     }
 
     /**
-     * Add multiple domains/extensions at once
+     * Add multiple domains/extensions/users at once
      */
     public function addMultiple(): void
     {
         $this->validate([
             'domainsText' => 'required|string',
-            'type' => 'required|in:domain,extension',
+            'type' => 'required|in:domain,extension,user',
             'reason' => 'nullable|string|max:255',
         ]);
 
@@ -150,7 +168,7 @@ class DomainList extends Component
     {
         DomainUnsubscribe::where('id', $id)->delete();
 
-        $this->selected = array_values(array_filter($this->selected, fn($x) => (int) $x !== (int) $id));
+        $this->selected = array_values(array_filter($this->selected, fn ($x) => (int) $x !== (int) $id));
         $this->resetPage();
     }
 
@@ -177,19 +195,32 @@ class DomainList extends Component
     }
 
     /**
-     * Query distinct domains from EmailAddress based on search mode
+     * Query distinct domains OR local_parts from EmailAddress based on search mode
+     * - domain/extension/all => returns rows with "domain"
+     * - user => returns rows with "local_part"
      */
     private function emailDomainQuery()
     {
         $s = mb_strtolower(trim($this->emailSearch));
 
-        $qb = EmailAddress::query()->select('domain')->whereNotNull('domain');
-
         // No search => return empty list
         if ($s === '') {
-            $qb->whereRaw('1=0');
-            return $qb;
+            return EmailAddress::query()->select('domain')->whereRaw('1=0');
         }
+
+        // USER MODE: search local_part
+        if ($this->emailSearchMode === 'user') {
+            $qb = EmailAddress::query()
+                ->select('local_part')
+                ->whereNotNull('local_part');
+
+            $qb->whereRaw('LOWER(local_part) LIKE ?', ['%' . $s . '%']);
+
+            return $qb->groupBy('local_part');
+        }
+
+        // Domain modes
+        $qb = EmailAddress::query()->select('domain')->whereNotNull('domain');
 
         // normalize input for extension
         $ext = $s;
@@ -201,26 +232,40 @@ class DomainList extends Component
             $qb->whereRaw('LOWER(domain) LIKE ?', ['%' . $s . '%']);
         } elseif ($this->emailSearchMode === 'extension') {
             $qb->whereRaw('LOWER(domain) LIKE ?', ['%' . $ext]);
-        } else {
+        } else { // all
             $qb->where(function ($q) use ($s, $ext) {
                 $q->whereRaw('LOWER(domain) LIKE ?', ['%' . $s . '%'])
                     ->orWhereRaw('LOWER(domain) LIKE ?', ['%' . $ext]);
             });
         }
 
-        // distinct domains
         return $qb->groupBy('domain');
     }
 
     /**
-     * Select all matched domains from emails
+     * Select all matched domains/local-parts from emails
      */
     public function selectAllEmailMatches(): void
     {
+        if ($this->emailSearchMode === 'user') {
+            $locals = $this->emailDomainQuery()
+                ->pluck('local_part')
+                ->map(fn ($d) => mb_strtolower(trim((string) $d)))
+                ->filter(fn ($d) => $d !== '')
+                ->unique()
+                ->values()
+                ->all();
+
+            $this->emailSelected = $locals;
+
+            $this->dispatch('toast', type: 'success', message: 'All matched users selected.');
+            return;
+        }
+
         $domains = $this->emailDomainQuery()
             ->pluck('domain')
-            ->map(fn($d) => mb_strtolower(trim((string) $d)))
-            ->filter(fn($d) => $d !== '')
+            ->map(fn ($d) => mb_strtolower(trim((string) $d)))
+            ->filter(fn ($d) => $d !== '')
             ->unique()
             ->values()
             ->all();
@@ -236,12 +281,32 @@ class DomainList extends Component
     }
 
     /**
-     * Open confirm modal to delete emails from database by selected domains
+     * Open confirm modal to delete emails from database by selected domains OR local_parts
      */
     public function openDeleteEmailsModal(): void
     {
         if (empty($this->emailSelected)) {
-            $this->dispatch('toast', type: 'error', message: 'Select domains first.');
+            $this->dispatch('toast', type: 'error', message: 'Select items first.');
+            return;
+        }
+
+        if ($this->emailSearchMode === 'user') {
+            $locals = array_values(array_unique(array_map(function ($d) {
+                $d = mb_strtolower(trim((string) $d));
+                $d = ltrim($d, '@');
+                $d = rtrim($d, '@');
+                if (str_contains($d, '@')) {
+                    $d = explode('@', $d, 2)[0];
+                }
+                return $d;
+            }, $this->emailSelected)));
+
+            $count = EmailAddress::query()
+                ->whereIn('local_part', $locals)
+                ->count();
+
+            $this->confirmDeleteEmailCount = (int) $count;
+            $this->showDeleteEmailsModal = true;
             return;
         }
 
@@ -266,7 +331,7 @@ class DomainList extends Component
     }
 
     /**
-     * Delete emails from DB (all emails under selected domains)
+     * Delete emails from DB
      */
     public function deleteEmailsConfirmed(): void
     {
@@ -275,8 +340,31 @@ class DomainList extends Component
         }
 
         if (empty($this->emailSelected)) {
-            $this->dispatch('toast', type: 'error', message: 'No domains selected.');
+            $this->dispatch('toast', type: 'error', message: 'No items selected.');
             $this->cancelDeleteEmails();
+            return;
+        }
+
+        if ($this->emailSearchMode === 'user') {
+            $locals = array_values(array_unique(array_map(function ($d) {
+                $d = mb_strtolower(trim((string) $d));
+                $d = ltrim($d, '@');
+                $d = rtrim($d, '@');
+                if (str_contains($d, '@')) {
+                    $d = explode('@', $d, 2)[0];
+                }
+                return $d;
+            }, $this->emailSelected)));
+
+            $deleted = EmailAddress::query()
+                ->whereIn('local_part', $locals)
+                ->delete();
+
+            $this->emailSelected = [];
+            $this->cancelDeleteEmails();
+            $this->resetPage();
+
+            $this->dispatch('toast', type: 'success', message: "Deleted {$deleted} email(s) from database.");
             return;
         }
 
@@ -306,20 +394,20 @@ class DomainList extends Component
             })
             ->when(trim($this->search) !== '', function ($qb) {
                 $s = mb_strtolower(trim($this->search));
-                $qb->where('value', 'like', '%' . $s . '%');
+                $qb->whereRaw('LOWER(value) LIKE ?', ['%' . $s . '%']);
             });
 
         $totalMatched = (clone $main)->count();
         $items = $main->latest('id')->paginate(15);
 
-        // Bottom: Email domain search results
+        // Bottom: Email domain/local_part search results
         $emailQ = $this->emailDomainQuery();
 
-        // count of unique domains matched
-        $emailMatched = (clone $emailQ)->pluck('domain')->count();
+        // count of unique values matched (fast count)
+        $emailMatched = (clone $emailQ)->count();
 
         $emailDomains = $emailQ
-            ->orderBy('domain')
+            ->orderBy($this->emailSearchMode === 'user' ? 'local_part' : 'domain')
             ->paginate(50);
 
         return view('livewire.email-manager.suppression.domain-list', [

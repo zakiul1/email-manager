@@ -27,7 +27,7 @@
 
                 <flux:sidebar.item :href="route('email-manager.imports.upload')"
                     :current="request()->routeIs('email-manager.imports.upload')" wire:navigate>
-                    Upload
+                    Import
                 </flux:sidebar.item>
                 <flux:sidebar.item :href="route('email-manager.emails')"
                     :current="request()->routeIs('email-manager.emails')" wire:navigate>
@@ -35,7 +35,7 @@
                 </flux:sidebar.item>
                 <flux:sidebar.item :href="route('email-manager.suppressions')"
                     :current="request()->routeIs('email-manager.suppressions')" wire:navigate>
-                    Suppressions
+                    Block Mail
                 </flux:sidebar.item>
 
                 <flux:sidebar.item :href="route('email-manager.domain-unsubscribes')"
