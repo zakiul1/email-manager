@@ -8,11 +8,20 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Livewire\Component;
+use Livewire\WithFileUploads;
 use Livewire\WithPagination;
 
 class DomainList extends Component
 {
     use WithPagination;
+    use WithFileUploads;
+
+    /* ============================================================
+     |  Input Modes (Textarea / File)
+     * ============================================================ */
+
+    public string $inputMode = 'textarea'; // textarea|file
+    public $uploadFile = null;             // Livewire TemporaryUploadedFile
 
     /**
      * Add multiple (textarea)
@@ -89,6 +98,50 @@ class DomainList extends Component
         }
     }
 
+    /* ============================================================
+     |  Normalization + Parsing
+     * ============================================================ */
+
+    /**
+     * Normalize one value consistently (used by BOTH textarea + file flow)
+     */
+    private function normalizeSingleValue(string $p, string $type): ?string
+    {
+        $v = mb_strtolower(trim((string) $p));
+        if ($v === '') {
+            return null;
+        }
+
+        $v = preg_replace('/\s+/', '', $v) ?? $v;
+        $v = ltrim($v, '@');
+
+        if ($type === 'domain') {
+            $v = ltrim($v, '.');
+            $v = rtrim($v, '@');
+        } elseif ($type === 'extension') {
+            $v = rtrim($v, '@');
+            $v = ltrim($v, '.');
+            if ($v !== '') {
+                $v = '.' . $v;
+            }
+        } else { // user
+            $v = rtrim($v, '@');
+
+            // if someone pasted a full email, keep only local-part
+            if (str_contains($v, '@')) {
+                $v = explode('@', $v, 2)[0];
+            }
+
+            $v = ltrim($v, '.');
+        }
+
+        if ($v === '' || mb_strlen($v) > 255) {
+            return null;
+        }
+
+        return $v;
+    }
+
     /**
      * Parse textarea into unique normalized values
      */
@@ -100,39 +153,10 @@ class DomainList extends Component
         $out = [];
 
         foreach ($parts as $p) {
-            $v = mb_strtolower(trim((string) $p));
-            if ($v === '') {
-                continue;
+            $nv = $this->normalizeSingleValue((string) $p, $type);
+            if ($nv !== null) {
+                $out[] = $nv;
             }
-
-            $v = preg_replace('/\s+/', '', $v) ?? $v;
-            $v = ltrim($v, '@');
-
-            if ($type === 'domain') {
-                $v = ltrim($v, '.');
-                $v = rtrim($v, '@');
-            } elseif ($type === 'extension') {
-                $v = rtrim($v, '@');
-                $v = ltrim($v, '.');
-                if ($v !== '') {
-                    $v = '.' . $v;
-                }
-            } else { // user
-                $v = rtrim($v, '@');
-
-                // if someone pasted a full email, keep only local-part
-                if (str_contains($v, '@')) {
-                    $v = explode('@', $v, 2)[0];
-                }
-
-                $v = ltrim($v, '.');
-            }
-
-            if ($v === '') {
-                continue;
-            }
-
-            $out[] = $v;
         }
 
         $out = array_values(array_unique($out));
@@ -190,6 +214,10 @@ class DomainList extends Component
 
         return null;
     }
+
+    /* ============================================================
+     |  Bulk Helpers
+     * ============================================================ */
 
     private function bulkDir(): string
     {
@@ -250,7 +278,6 @@ class DomainList extends Component
 
     private function bulkInitFailureFile(string $uploadId): void
     {
-        // ✅ ensure directory exists, use Storage consistently
         Storage::disk('local')->makeDirectory($this->bulkDir());
 
         $path = $this->bulkFailurePath($uploadId);
@@ -260,32 +287,22 @@ class DomainList extends Component
         }
     }
 
-    private function bulkAppendFailure(string $uploadId, string $value, string $reason): void
-    {
-        $path = $this->bulkFailurePath($uploadId);
+   private function bulkAppendFailure(string $uploadId, string $value, string $reason, array &$state): void
+{
+    $path = $this->bulkFailurePath($uploadId);
+    Storage::disk('local')->append($path, $this->csvLine([$value, $reason]));
 
-        // ✅ append safely via Storage
-        Storage::disk('local')->append($path, $this->csvLine([$value, $reason]));
-
-        // keep small preview in cache (max 50)
-        $key = $this->bulkCacheKey($uploadId);
-        $state = Cache::get($key, []);
-        if (!is_array($state)) {
-            $state = [];
-        }
-
-        $preview = (array) ($state['failure_preview'] ?? []);
-        if (count($preview) < 50) {
-            $preview[] = ['value' => $value, 'reason' => $reason];
-        }
-
-        $state['failure_preview'] = $preview;
-        Cache::put($key, $state, now()->addHours(6));
+    $preview = (array) ($state['failure_preview'] ?? []);
+    if (count($preview) < 50) {
+        $preview[] = ['value' => $value, 'reason' => $reason];
     }
+    $state['failure_preview'] = $preview;
+}
 
-    /**
-     * START chunked bulk add
-     */
+    /* ============================================================
+     |  Start Chunked Bulk Add - Textarea (existing)
+     * ============================================================ */
+
     public function startBulkAdd(): void
     {
         $this->validate([
@@ -304,16 +321,11 @@ class DomainList extends Component
         $uploadId = (string) Str::uuid();
         $inputPath = $this->bulkInputPath($uploadId);
 
-        // ✅ ensure directory exists
         Storage::disk('local')->makeDirectory($this->bulkDir());
-
-        // write normalized values to file (one per line)
         Storage::disk('local')->put($inputPath, implode("\n", $values) . "\n");
 
-        // init failure file
         $this->bulkInitFailureFile($uploadId);
 
-        // init state in cache
         Cache::put($this->bulkCacheKey($uploadId), [
             'upload_id' => $uploadId,
             'type' => $this->type,
@@ -328,12 +340,11 @@ class DomainList extends Component
             'failure_preview' => [],
         ], now()->addHours(6));
 
-        // set livewire state
         $this->bulkUploadId = $uploadId;
         $this->bulkIsRunning = true;
         $this->bulkIsDone = false;
 
-        // ✅ clear textarea immediately
+        // clear textarea immediately
         $this->domainsText = '';
 
         $this->bulkSyncFromCache($uploadId);
@@ -341,9 +352,108 @@ class DomainList extends Component
         $this->dispatch('toast', type: 'success', message: 'Bulk processing started (chunk-wise).');
     }
 
-    /**
-     * Process next chunk
-     */
+    /* ============================================================
+     |  Start Chunked Bulk Add - File (NEW)
+     * ============================================================ */
+
+    public function startBulkAddFromFile(): void
+    {
+        $this->validate([
+            'uploadFile' => 'required|file|max:20480|mimes:txt,csv',
+            'type' => 'required|in:domain,extension,user',
+            'reason' => 'nullable|string|max:255',
+        ]);
+
+        $uploadId = (string) Str::uuid();
+
+        Storage::disk('local')->makeDirectory($this->bulkDir());
+
+        $realPath = method_exists($this->uploadFile, 'getRealPath')
+            ? $this->uploadFile->getRealPath()
+            : $this->uploadFile->path();
+
+        $name = mb_strtolower($this->uploadFile->getClientOriginalName() ?? '');
+        $isCsv = str_ends_with($name, '.csv');
+
+        $file = new \SplFileObject($realPath, 'r');
+        $file->setFlags(\SplFileObject::DROP_NEW_LINE);
+
+        $seen = [];
+        $out = [];
+
+        while (!$file->eof()) {
+            $line = trim((string) $file->fgets());
+            if ($line === '') {
+                continue;
+            }
+
+            // if csv: take first column only
+            if ($isCsv) {
+                $cols = str_getcsv($line);
+                $line = trim((string) ($cols[0] ?? ''));
+                if ($line === '') {
+                    continue;
+                }
+            }
+
+            // allow comma/semicolon too
+            $parts = preg_split('/[\r\n,;]+/', $line) ?: [];
+            foreach ($parts as $p) {
+                $nv = $this->normalizeSingleValue((string) $p, $this->type);
+                if ($nv === null) {
+                    continue;
+                }
+                if (isset($seen[$nv])) {
+                    continue;
+                }
+                $seen[$nv] = true;
+                $out[] = $nv;
+            }
+        }
+
+        if (empty($out)) {
+            $this->dispatch('toast', type: 'error', message: 'No valid items found in file.');
+            return;
+        }
+
+        // write normalized values to SAME input file format
+        Storage::disk('local')->put($this->bulkInputPath($uploadId), implode("\n", $out) . "\n");
+
+        // init failure file
+        $this->bulkInitFailureFile($uploadId);
+
+        // init state in cache
+        Cache::put($this->bulkCacheKey($uploadId), [
+            'upload_id' => $uploadId,
+            'type' => $this->type,
+            'reason' => $this->reason,
+            'total' => count($out),
+            'processed' => 0,
+            'added' => 0,
+            'updated' => 0,
+            'invalid' => 0,
+            'offset' => 0,
+            'done' => false,
+            'failure_preview' => [],
+        ], now()->addHours(6));
+
+        $this->bulkUploadId = $uploadId;
+        $this->bulkIsRunning = true;
+        $this->bulkIsDone = false;
+
+        // clear inputs
+        $this->domainsText = '';
+        $this->uploadFile = null;
+
+        $this->bulkSyncFromCache($uploadId);
+
+        $this->dispatch('toast', type: 'success', message: 'Bulk processing started (file → chunk-wise).');
+    }
+
+    /* ============================================================
+     |  Process Chunk (same engine)
+     * ============================================================ */
+
     public function processChunk(): void
     {
         if (!$this->bulkUploadId) {
@@ -358,10 +468,8 @@ class DomainList extends Component
         if (!is_array($state)) {
             $this->dispatch('toast', type: 'error', message: 'Bulk session expired.');
 
-            // ✅ unlock UI
             $this->bulkIsRunning = false;
             $this->bulkIsDone = false;
-            $this->bulkUploadId = null;
 
             return;
         }
@@ -369,12 +477,10 @@ class DomainList extends Component
         if (($state['done'] ?? false) === true) {
             $this->bulkIsRunning = false;
             $this->bulkIsDone = true;
-            $this->bulkUploadId = null; // ✅ unlock UI
             $this->bulkSyncFromCache($uploadId);
             return;
         }
 
-        // Avoid double-processing on fast clicks/polling
         $lock = Cache::lock($this->bulkLockKey($uploadId), 20);
         if (!$lock->get()) {
             return;
@@ -386,7 +492,6 @@ class DomainList extends Component
             $offset = (int) ($state['offset'] ?? 0);
             $total = (int) ($state['total'] ?? 0);
 
-            // ✅ use Storage for existence + path
             $inputPath = $this->bulkInputPath($uploadId);
             if (!Storage::disk('local')->exists($inputPath)) {
                 $this->dispatch('toast', type: 'error', message: 'Bulk input file missing.');
@@ -394,10 +499,8 @@ class DomainList extends Component
                 $state['done'] = true;
                 Cache::put($cacheKey, $state, now()->addHours(6));
 
-                // ✅ unlock UI
                 $this->bulkIsRunning = false;
                 $this->bulkIsDone = true;
-                $this->bulkUploadId = null;
 
                 return;
             }
@@ -427,7 +530,6 @@ class DomainList extends Component
             }
 
             if (empty($chunkValues)) {
-                // finished
                 $state['offset'] = $offset;
                 $state['processed'] = min($total, (int) ($state['processed'] ?? 0));
                 $state['done'] = true;
@@ -441,20 +543,16 @@ class DomainList extends Component
                 $this->selected = [];
                 $this->resetPage();
 
-                // ✅ unlock UI
-                $this->bulkUploadId = null;
-
                 $this->dispatch('toast', type: 'success', message: 'Bulk processing completed.');
                 return;
             }
 
-            // Validate + split valid/invalid
             $valid = [];
             foreach ($chunkValues as $v) {
                 $err = $this->validateValue($v, $type);
                 if ($err !== null) {
                     $state['invalid'] = (int) ($state['invalid'] ?? 0) + 1;
-                    $this->bulkAppendFailure($uploadId, $v, $err);
+                   $this->bulkAppendFailure($uploadId, $v, $err, $state);
                     continue;
                 }
                 $valid[] = $v;
@@ -462,7 +560,6 @@ class DomainList extends Component
 
             $now = now();
 
-            // Count existing to estimate added vs updated
             $existing = [];
             if (!empty($valid)) {
                 $existing = DomainUnsubscribe::query()
@@ -517,7 +614,6 @@ class DomainList extends Component
             }
 
             Cache::put($cacheKey, $state, now()->addHours(6));
-
             $this->bulkSyncFromCache($uploadId);
 
             if (($state['done'] ?? false) === true) {
@@ -528,9 +624,6 @@ class DomainList extends Component
                 $this->selected = [];
                 $this->resetPage();
 
-                // ✅ unlock UI
-                $this->bulkUploadId = null;
-
                 $this->dispatch('toast', type: 'success', message: 'Bulk processing completed.');
             }
         } finally {
@@ -538,9 +631,10 @@ class DomainList extends Component
         }
     }
 
-    /**
-     * Cancel/Reset current bulk session (does not delete DB rows)
-     */
+    /* ============================================================
+     |  Reset / Download Failures
+     * ============================================================ */
+
     public function resetBulk(): void
     {
         if ($this->bulkUploadId) {
@@ -561,11 +655,13 @@ class DomainList extends Component
         $this->bulkUpdated = 0;
         $this->bulkInvalid = 0;
         $this->bulkFailurePreview = [];
+
+        $this->uploadFile = null;
+        $this->domainsText = '';
+        $this->reason = null;
+        $this->inputMode = 'textarea';
     }
 
-    /**
-     * Download failures CSV (invalid rows)
-     */
     public function downloadBulkFailures()
     {
         if (!$this->bulkUploadId) {
@@ -585,9 +681,10 @@ class DomainList extends Component
         return response()->download($full, "domain_unsubscribes_failures_{$this->bulkUploadId}.csv");
     }
 
-    /**
-     * Old single-request addMultiple()
-     */
+    /* ============================================================
+     |  Existing List + Email Delete Tools (unchanged)
+     * ============================================================ */
+
     public function addMultiple(): void
     {
         $this->dispatch('toast', type: 'error', message: 'Please use the new chunked bulk add (Start).');
@@ -601,9 +698,6 @@ class DomainList extends Component
         $this->resetPage();
     }
 
-    /**
-     * MAIN list bulk delete
-     */
     public function bulkDeleteSelected(): void
     {
         if (empty($this->selected)) {
@@ -623,11 +717,6 @@ class DomainList extends Component
         $this->dispatch('toast', type: 'success', message: 'Deleted selected items.');
     }
 
-    /**
-     * Query distinct domains OR local_parts from EmailAddress based on search mode
-     * - domain/extension/all => returns rows with "domain"
-     * - user => returns rows with "local_part"
-     */
     private function emailDomainQuery()
     {
         $s = mb_strtolower(trim($this->emailSearch));
@@ -667,9 +756,6 @@ class DomainList extends Component
         return $qb->groupBy('domain');
     }
 
-    /**
-     * Select all matched domains/local-parts from emails
-     */
     public function selectAllEmailMatches(): void
     {
         if ($this->emailSearchMode === 'user') {
@@ -705,9 +791,6 @@ class DomainList extends Component
         $this->emailSelected = [];
     }
 
-    /**
-     * Open confirm modal to delete emails from database by selected domains OR local_parts
-     */
     public function openDeleteEmailsModal(): void
     {
         if (empty($this->emailSelected)) {
@@ -755,9 +838,6 @@ class DomainList extends Component
         $this->confirmDeleteEmailCount = 0;
     }
 
-    /**
-     * Delete emails from DB
-     */
     public function deleteEmailsConfirmed(): void
     {
         if (!$this->showDeleteEmailsModal) {

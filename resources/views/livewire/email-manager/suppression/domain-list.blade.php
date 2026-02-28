@@ -12,6 +12,16 @@
         <flux:card>
             <flux:heading size="md">Add Domains / Extensions / Users</flux:heading>
 
+            {{-- ✅ Progress UI (shared partial like Global Suppressions) --}}
+            @if (!empty($bulkUploadId))
+                @include('livewire.email-manager.suppression._bulk-progress', [
+                    'metric4Label' => 'Updated',
+                    'metric4Value' => $bulkUpdated ?? 0,
+                    'previewKey' => 'value',
+                    'previewTitle' => 'Failures Preview',
+                ])
+            @endif
+
             {{-- ✅ IMPORTANT: disable the whole form safely --}}
             <fieldset class="mt-4 space-y-3" @if ($disableAddForm) disabled @endif>
                 <flux:field>
@@ -24,25 +34,67 @@
                     <flux:error name="type" />
                 </flux:field>
 
-                <flux:field>
-                    <flux:label>Paste multiple (line break / comma / semicolon)</flux:label>
+                {{-- Tabs --}}
+                <div class="flex gap-2">
+                    <button type="button"
+                        class="rounded-md border px-3 py-2 text-sm {{ ($inputMode ?? 'textarea') === 'textarea' ? 'bg-black text-white' : '' }}"
+                        wire:click="$set('inputMode','textarea')">
+                        Textarea
+                    </button>
 
-                    <textarea wire:model="domainsText" rows="8" class="w-full rounded-md border px-3 py-2 text-sm" placeholder=""></textarea>
+                    <button type="button"
+                        class="rounded-md border px-3 py-2 text-sm {{ ($inputMode ?? 'textarea') === 'file' ? 'bg-black text-white' : '' }}"
+                        wire:click="$set('inputMode','file')">
+                        File
+                    </button>
+                </div>
 
-                    <flux:error name="domainsText" />
+                {{-- Input area --}}
+                @if (($inputMode ?? 'textarea') === 'textarea')
+                    <flux:field>
+                        <flux:label>Paste multiple (line break / comma / semicolon)</flux:label>
 
-                    <div class="text-xs text-muted-foreground mt-1">
-                        @if (($type ?? 'domain') === 'extension')
-                            For extensions use: <span class="font-medium">.bd</span> or
-                            <span class="font-medium">.com.bd</span>
-                        @elseif (($type ?? 'domain') === 'user')
-                            For users use: <span class="font-medium">pk_d@</span> or
-                            <span class="font-medium">pk.dutta@</span> (blocks any domain)
-                        @else
-                            For domains use: <span class="font-medium">example.com</span> (exact match)
-                        @endif
-                    </div>
-                </flux:field>
+                        <textarea wire:model="domainsText" rows="8" class="w-full rounded-md border px-3 py-2 text-sm"
+                            placeholder=""></textarea>
+
+                        <flux:error name="domainsText" />
+
+                        <div class="text-xs text-muted-foreground mt-1">
+                            @if (($type ?? 'domain') === 'extension')
+                                For extensions use: <span class="font-medium">.bd</span> or
+                                <span class="font-medium">.com.bd</span>
+                            @elseif (($type ?? 'domain') === 'user')
+                                For users use: <span class="font-medium">pk_d@</span> or
+                                <span class="font-medium">pk.dutta@</span> (blocks any domain)
+                            @else
+                                For domains use: <span class="font-medium">example.com</span> (exact match)
+                            @endif
+                        </div>
+                    </flux:field>
+                @else
+                    <flux:field>
+                        <flux:label>Upload file (.txt or .csv)</flux:label>
+
+                        <input type="file" wire:model="uploadFile"
+                            class="w-full rounded-md border px-3 py-2 text-sm" />
+
+                        <flux:error name="uploadFile" />
+
+                        <div class="text-xs text-muted-foreground mt-1">
+                            TXT: one value per line (comma/semicolon also supported).
+                            CSV: first column is the value.
+                            <span class="block mt-1">
+                                @if (($type ?? 'domain') === 'extension')
+                                    Example: <span class="font-medium">.bd</span>, <span class="font-medium">.com.bd</span>
+                                @elseif (($type ?? 'domain') === 'user')
+                                    Example: <span class="font-medium">pk_d</span>, <span class="font-medium">pk_d@</span>, <span class="font-medium">pk.dutta@</span>
+                                @else
+                                    Example: <span class="font-medium">example.com</span>
+                                @endif
+                            </span>
+                        </div>
+                    </flux:field>
+                @endif
 
                 <flux:field>
                     <flux:label>Reason (optional)</flux:label>
@@ -55,9 +107,15 @@
                     @if ($disableAddForm)
                         <flux:button disabled>Start</flux:button>
                     @else
-                        <flux:button wire:click="startBulkAdd" wire:loading.attr="disabled">
-                            Start
-                        </flux:button>
+                        @if (($inputMode ?? 'textarea') === 'file')
+                            <flux:button wire:click="startBulkAddFromFile" wire:loading.attr="disabled">
+                                Start
+                            </flux:button>
+                        @else
+                            <flux:button wire:click="startBulkAdd" wire:loading.attr="disabled">
+                                Start
+                            </flux:button>
+                        @endif
                     @endif
 
                     {{-- Continue Chunk --}}
@@ -81,111 +139,6 @@
                     </div>
                 </div>
             </fieldset>
-
-            {{-- Progress UI --}}
-            @if (!empty($bulkUploadId))
-                @php
-                    $total = (int) ($bulkTotal ?? 0);
-                    $processed = (int) ($bulkProcessed ?? 0);
-                    $percent = $total > 0 ? (int) round(($processed / $total) * 100) : 0;
-                    $percent = max(0, min(100, $percent));
-                @endphp
-
-                <div class="mt-4 space-y-2">
-                    <div class="flex items-center justify-between text-xs text-muted-foreground">
-                        <div>
-                            Status:
-                            @if (!empty($bulkIsDone))
-                                <span class="font-semibold text-foreground">Done</span>
-                            @elseif(!empty($bulkIsRunning))
-                                <span class="font-semibold text-foreground">Running</span>
-                            @else
-                                <span class="font-semibold text-foreground">Ready</span>
-                            @endif
-                        </div>
-                        <div class="font-semibold text-foreground">
-                            {{ $percent }}%
-                        </div>
-                    </div>
-
-                    <div class="h-2 w-full rounded bg-gray-200 overflow-hidden">
-                        <div class="h-2 bg-black/70" style="width: {{ $percent }}%"></div>
-                    </div>
-
-                    <div class="grid grid-cols-2 gap-2 text-xs">
-                        <div class="rounded border p-2">
-                            <div class="text-muted-foreground">Total</div>
-                            <div class="font-semibold">{{ number_format($bulkTotal ?? 0) }}</div>
-                        </div>
-                        <div class="rounded border p-2">
-                            <div class="text-muted-foreground">Processed</div>
-                            <div class="font-semibold">{{ number_format($bulkProcessed ?? 0) }}</div>
-                        </div>
-                        <div class="rounded border p-2">
-                            <div class="text-muted-foreground">Added</div>
-                            <div class="font-semibold">{{ number_format($bulkAdded ?? 0) }}</div>
-                        </div>
-                        <div class="rounded border p-2">
-                            <div class="text-muted-foreground">Updated</div>
-                            <div class="font-semibold">{{ number_format($bulkUpdated ?? 0) }}</div>
-                        </div>
-                        <div class="rounded border p-2 col-span-2">
-                            <div class="text-muted-foreground">Invalid</div>
-                            <div class="font-semibold">{{ number_format($bulkInvalid ?? 0) }}</div>
-                        </div>
-                    </div>
-
-                    {{-- Auto process chunks (polling) --}}
-                    @if (!empty($bulkIsRunning) && empty($bulkIsDone))
-                        <div class="text-xs text-muted-foreground">
-                            Auto-processing chunks...
-                        </div>
-                        <div wire:poll.750ms="processChunk"></div>
-                    @endif
-
-                    {{-- Failures preview + download --}}
-                    <div class="mt-3">
-                        <div class="flex items-center justify-between">
-                            <div class="text-sm font-medium">Failures (preview)</div>
-
-                            <button type="button" class="rounded-md border px-3 py-2 text-sm"
-                                wire:click="downloadBulkFailures" wire:loading.attr="disabled"
-                                @if (($bulkInvalid ?? 0) <= 0) disabled @endif>
-                                Download failures CSV
-                            </button>
-                        </div>
-
-                        <div class="mt-2 overflow-x-auto rounded border">
-                            <table class="min-w-full text-sm">
-                                <thead class="text-left">
-                                    <tr class="border-b">
-                                        <th class="px-3 py-2 font-medium">Value</th>
-                                        <th class="px-3 py-2 font-medium">Reason</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    @forelse(($bulkFailurePreview ?? []) as $f)
-                                        <tr class="border-b">
-                                            <td class="px-3 py-2 font-medium">{{ $f['value'] ?? '' }}</td>
-                                            <td class="px-3 py-2 text-muted-foreground">{{ $f['reason'] ?? '' }}</td>
-                                        </tr>
-                                    @empty
-                                        <tr>
-                                            <td colspan="2" class="px-3 py-3 text-center text-muted-foreground">
-                                                No failures yet.
-                                            </td>
-                                        </tr>
-                                    @endforelse
-                                </tbody>
-                            </table>
-                        </div>
-
-                        <div class="mt-1 text-xs text-muted-foreground">
-                            Preview shows up to 50 items. Download CSV to get full error list.
-                        </div>
-                    </div>
-                </div>
-            @endif
         </flux:card>
 
         {{-- Current List --}}

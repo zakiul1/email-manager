@@ -9,15 +9,26 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Livewire\Component;
+use Livewire\WithFileUploads;
 use Livewire\WithPagination;
 
 class GlobalList extends Component
 {
     use WithPagination;
+    use WithFileUploads;
+
+    /* ============================================================
+     |  Input Modes (Textarea / File)
+     * ============================================================ */
+
+    public string $inputMode = 'textarea'; // textarea|file
 
     // textarea input: newline/comma/semicolon separated
     public string $emails = '';
     public ?string $reason = null;
+
+    // file input (txt/csv)
+    public $uploadFile = null;
 
     // Result summary (kept for backward compatibility)
     public array $result = [
@@ -96,7 +107,6 @@ class GlobalList extends Component
 
     private function bulkInitFailureFile(string $uploadId): void
     {
-        // ✅ use Storage consistently (avoid storage_path/file_exists mismatch)
         Storage::disk('local')->makeDirectory($this->bulkDir());
 
         $path = $this->bulkFailurePath($uploadId);
@@ -106,31 +116,21 @@ class GlobalList extends Component
         }
     }
 
-    private function bulkAppendFailure(string $uploadId, string $email, string $reason): void
-    {
-        // ✅ use Storage append (avoid fopen to missing paths)
-        $path = $this->bulkFailurePath($uploadId);
-        Storage::disk('local')->append($path, $this->csvLine([$email, $reason]));
+   private function bulkAppendFailure(string $uploadId, string $email, string $reason, array &$state): void
+{
+    $path = $this->bulkFailurePath($uploadId);
+    Storage::disk('local')->append($path, $this->csvLine([$email, $reason]));
 
-        // preview (max 50)
-        $key = $this->bulkCacheKey($uploadId);
-        $state = Cache::get($key, []);
-        if (!is_array($state)) {
-            $state = [];
-        }
-
-        $preview = (array) ($state['failure_preview'] ?? []);
-        if (count($preview) < 50) {
-            $preview[] = ['email' => $email, 'reason' => $reason];
-        }
-
-        $state['failure_preview'] = $preview;
-        Cache::put($key, $state, now()->addHours(6));
+    // keep preview in the SAME state being saved at end of chunk
+    $preview = (array) ($state['failure_preview'] ?? []);
+    if (count($preview) < 50) {
+        $preview[] = ['email' => $email, 'reason' => $reason];
     }
+    $state['failure_preview'] = $preview;
+}
 
     private function csvLine(array $cols): string
     {
-        // safe CSV line without needing fopen
         $escaped = array_map(function ($v) {
             $v = (string) $v;
             $v = str_replace('"', '""', $v);
@@ -176,12 +176,9 @@ class GlobalList extends Component
     }
 
     /* ============================================================
-     |  New Chunked Flow
+     |  Start Bulk From Textarea (existing)
      * ============================================================ */
 
-    /**
-     * Start chunked bulk add
-     */
     public function startBulkAdd(): void
     {
         // reset
@@ -217,14 +214,11 @@ class GlobalList extends Component
 
         $uploadId = (string) Str::uuid();
 
-        // ✅ ensure directory exists + write file using Storage
         Storage::disk('local')->makeDirectory($this->bulkDir());
         Storage::disk('local')->put($this->bulkInputPath($uploadId), implode("\n", $normalized) . "\n");
 
-        // init failures csv
         $this->bulkInitFailureFile($uploadId);
 
-        // init cache state
         Cache::put($this->bulkCacheKey($uploadId), [
             'upload_id' => $uploadId,
             'reason' => $this->reason,
@@ -242,17 +236,116 @@ class GlobalList extends Component
         $this->bulkIsRunning = true;
         $this->bulkIsDone = false;
 
-        // ✅ clear textarea immediately (user can’t edit while running anyway)
+        // clear textarea immediately
         $this->emails = '';
 
         $this->bulkSyncFromCache($uploadId);
-
         $this->dispatch('toast', type: 'success', message: 'Bulk processing started (chunk-wise).');
     }
 
-    /**
-     * Process next chunk (call repeatedly from UI / polling)
-     */
+    /* ============================================================
+     |  Start Bulk From File (NEW) - feeds SAME chunk engine
+     * ============================================================ */
+
+    public function startBulkAddFromFile(): void
+    {
+        // reset
+        $this->result = ['total' => 0, 'added' => 0, 'already' => 0, 'invalid' => 0];
+        $this->invalidPreview = [];
+        $this->bulkFailurePreview = [];
+
+        $this->validate([
+            'uploadFile' => 'required|file|max:20480|mimes:txt,csv', // 20MB
+            'reason' => 'nullable|string|max:255',
+        ]);
+
+        $uploadId = (string) Str::uuid();
+
+        Storage::disk('local')->makeDirectory($this->bulkDir());
+        $out = [];
+
+        // Stream uploaded file safely
+        $realPath = method_exists($this->uploadFile, 'getRealPath')
+            ? $this->uploadFile->getRealPath()
+            : $this->uploadFile->path();
+
+        $name = mb_strtolower($this->uploadFile->getClientOriginalName() ?? '');
+        $isCsv = str_ends_with($name, '.csv');
+
+        $file = new \SplFileObject($realPath, 'r');
+        $file->setFlags(\SplFileObject::DROP_NEW_LINE);
+
+        $seen = [];
+        while (!$file->eof()) {
+            $line = trim((string) $file->fgets());
+            if ($line === '') {
+                continue;
+            }
+
+            // If CSV, take first column from each row
+            if ($isCsv) {
+                $cols = str_getcsv($line);
+                $line = trim((string) ($cols[0] ?? ''));
+                if ($line === '') {
+                    continue;
+                }
+            }
+
+            // Allow comma/semicolon separated values per line too
+            foreach ($this->parseEmails($line) as $raw) {
+                $email = $this->normalizeEmail($raw);
+                if ($email === '') {
+                    continue;
+                }
+                if (isset($seen[$email])) {
+                    continue;
+                }
+                $seen[$email] = true;
+                $out[] = $email;
+            }
+        }
+
+        if (count($out) === 0) {
+            $this->dispatch('toast', type: 'error', message: 'No valid items found in file.');
+            return;
+        }
+
+        // Write normalized list to SAME temp file format used by textarea flow
+        Storage::disk('local')->put($this->bulkInputPath($uploadId), implode("\n", $out) . "\n");
+
+        // init failures csv
+        $this->bulkInitFailureFile($uploadId);
+
+        // init cache state
+        Cache::put($this->bulkCacheKey($uploadId), [
+            'upload_id' => $uploadId,
+            'reason' => $this->reason,
+            'total' => count($out),
+            'processed' => 0,
+            'added' => 0,
+            'already' => 0,
+            'invalid' => 0,
+            'offset' => 0,
+            'done' => false,
+            'failure_preview' => [],
+        ], now()->addHours(6));
+
+        $this->bulkUploadId = $uploadId;
+        $this->bulkIsRunning = true;
+        $this->bulkIsDone = false;
+
+        // clear inputs
+        $this->emails = '';
+        $this->uploadFile = null;
+
+        $this->bulkSyncFromCache($uploadId);
+        $this->dispatch('toast', type: 'success', message: 'Bulk processing started (file → chunk-wise).');
+    }
+
+    /* ============================================================
+     |  Chunk Processor (unchanged engine)
+     * ============================================================ */
+
     public function processChunk(): void
     {
         if (!$this->bulkUploadId) {
@@ -268,19 +361,16 @@ class GlobalList extends Component
             $this->dispatch('toast', type: 'error', message: 'Bulk session expired.');
             $this->bulkIsRunning = false;
             $this->bulkIsDone = false;
-            $this->bulkUploadId = null; // ✅ unlock UI
             return;
         }
 
         if (($state['done'] ?? false) === true) {
             $this->bulkIsRunning = false;
             $this->bulkIsDone = true;
-            $this->bulkUploadId = null; // ✅ unlock UI
             $this->bulkSyncFromCache($uploadId);
             return;
         }
 
-        // prevent concurrent chunk processing
         $lock = Cache::lock($this->bulkLockKey($uploadId), 20);
         if (!$lock->get()) {
             return;
@@ -291,7 +381,6 @@ class GlobalList extends Component
             $total = (int) ($state['total'] ?? 0);
             $reason = $state['reason'] ?? $this->reason;
 
-            // ✅ use Storage for existence + path
             $inputPath = $this->bulkInputPath($uploadId);
             if (!Storage::disk('local')->exists($inputPath)) {
                 $this->dispatch('toast', type: 'error', message: 'Bulk input file missing.');
@@ -299,10 +388,8 @@ class GlobalList extends Component
                 $state['done'] = true;
                 Cache::put($cacheKey, $state, now()->addHours(6));
 
-                // ✅ unlock UI
                 $this->bulkIsRunning = false;
                 $this->bulkIsDone = true;
-                $this->bulkUploadId = null;
 
                 return;
             }
@@ -332,7 +419,6 @@ class GlobalList extends Component
             }
 
             if (empty($chunk)) {
-                // done
                 $state['offset'] = $offset;
                 $state['done'] = true;
                 Cache::put($cacheKey, $state, now()->addHours(6));
@@ -341,23 +427,20 @@ class GlobalList extends Component
                 $this->bulkIsDone = true;
                 $this->bulkSyncFromCache($uploadId);
 
-                // ✅ clear inputs + unlock UI for next upload
                 $this->reset(['emails', 'reason']);
                 $this->resetPage();
-                $this->bulkUploadId = null;
 
                 $this->dispatch('toast', type: 'success', message: 'Bulk processing completed.');
                 return;
             }
 
-            // validate + split valid/invalid
             $validEmails = [];
             $emailParts = []; // email => [local, domain]
 
             foreach ($chunk as $email) {
                 if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
                     $state['invalid'] = (int) ($state['invalid'] ?? 0) + 1;
-                    $this->bulkAppendFailure($uploadId, $email, 'Invalid format');
+                   $this->bulkAppendFailure($uploadId, $email, 'Invalid format', $state);
                     continue;
                 }
 
@@ -382,7 +465,6 @@ class GlobalList extends Component
 
             if (!empty($validEmails)) {
                 DB::transaction(function () use ($validEmails, $emailParts, $now, $userId, $reason, &$state) {
-                    // Upsert email_addresses
                     $emailRows = [];
                     foreach ($validEmails as $email) {
                         [$local, $domain] = $emailParts[$email];
@@ -469,10 +551,8 @@ class GlobalList extends Component
                 $this->bulkIsRunning = false;
                 $this->bulkIsDone = true;
 
-                // ✅ unlock UI + clear inputs
                 $this->reset(['emails', 'reason']);
                 $this->resetPage();
-                $this->bulkUploadId = null;
 
                 $this->dispatch('toast', type: 'success', message: 'Bulk processing completed.');
             }
@@ -481,9 +561,10 @@ class GlobalList extends Component
         }
     }
 
-    /**
-     * Reset/cancel current bulk session (does not delete DB rows)
-     */
+    /* ============================================================
+     |  Reset / Download Failures
+     * ============================================================ */
+
     public function resetBulk(): void
     {
         if ($this->bulkUploadId) {
@@ -508,11 +589,13 @@ class GlobalList extends Component
         $this->invalidPreview = [];
 
         $this->result = ['total' => 0, 'added' => 0, 'already' => 0, 'invalid' => 0];
+
+        $this->emails = '';
+        $this->reason = null;
+        $this->uploadFile = null;
+        $this->inputMode = 'textarea';
     }
 
-    /**
-     * Download failures CSV
-     */
     public function downloadBulkFailures()
     {
         if (!$this->bulkUploadId) {
@@ -528,13 +611,13 @@ class GlobalList extends Component
         }
 
         $full = Storage::disk('local')->path($path);
-
         return response()->download($full, "global_suppressions_failures_{$this->bulkUploadId}.csv");
     }
 
-    /**
-     * Old single-request add() replaced by chunked flow.
-     */
+    /* ============================================================
+     |  CRUD
+     * ============================================================ */
+
     public function add(): void
     {
         $this->startBulkAdd();
@@ -557,7 +640,6 @@ class GlobalList extends Component
             ->latest('id')
             ->paginate(15);
 
-        // keep UI synced while rendering
         if ($this->bulkUploadId) {
             $this->bulkSyncFromCache($this->bulkUploadId);
         }
