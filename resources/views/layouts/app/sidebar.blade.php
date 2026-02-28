@@ -29,13 +29,15 @@
                     :current="request()->routeIs('email-manager.imports.upload')" wire:navigate>
                     Import
                 </flux:sidebar.item>
+
                 <flux:sidebar.item :href="route('email-manager.emails')"
                     :current="request()->routeIs('email-manager.emails')" wire:navigate>
                     Emails
                 </flux:sidebar.item>
+
                 <flux:sidebar.item :href="route('email-manager.suppressions')"
                     :current="request()->routeIs('email-manager.suppressions')" wire:navigate>
-                    Block Mail
+                    Unsubscribe
                 </flux:sidebar.item>
 
                 <flux:sidebar.item :href="route('email-manager.domain-unsubscribes')"
@@ -43,11 +45,15 @@
                     Domain Unsubscribes
                 </flux:sidebar.item>
 
-
-
                 <flux:sidebar.item :href="route('email-manager.exports')"
                     :current="request()->routeIs('email-manager.exports*')" wire:navigate>
                     Exports
+                </flux:sidebar.item>
+
+                {{-- ✅ NEW: Database Backup --}}
+                <flux:sidebar.item :href="route('email-manager.db-backup.index')"
+                    :current="request()->routeIs('email-manager.db-backup.*')" wire:navigate>
+                    Database Backup
                 </flux:sidebar.item>
             </flux:sidebar.group>
         </flux:sidebar.nav>
@@ -129,7 +135,6 @@
                 }
             }
 
-            // ✅ default timeout increased so user can read it
             function showToast({
                 type = 'info',
                 message = 'Done',
@@ -159,7 +164,7 @@
                 showToast(event.detail || {});
             });
 
-            // ✅ Show toast after redirect (session flash)
+            // Show toast after redirect (session flash)
             const flash = @json(session('toast'));
             if (flash && flash.message) {
                 setTimeout(() => showToast(flash), 150);

@@ -20,11 +20,12 @@ use App\Livewire\EmailManager\Emails\Index as EmailsIndex;
 
 // Exports (Direct)
 use App\Livewire\EmailManager\Exports\Create as ExportCreate;
-// (Optional) keep old index if you still want it later
-// use App\Livewire\EmailManager\Exports\Index as ExportIndex;
 
 use App\Http\Controllers\EmailManager\CategoryDownloadController;
 use App\Http\Controllers\EmailManager\DirectExportDownloadController;
+
+// ✅ DB Backup (Direct Download)
+use App\Http\Controllers\EmailManager\DbBackupDownloadController;
 
 Route::middleware(['auth', 'verified'])->group(function () {
 
@@ -108,4 +109,20 @@ Route::middleware(['auth', 'verified'])->group(function () {
 
         return Storage::disk($file->disk)->download($file->path, $file->filename);
     })->name('email-manager.exports.download-file');
+
+    // -------------------------
+    // ✅ Database Backup (DIRECT DOWNLOAD)
+    // -------------------------
+
+    /**
+     * Shows a simple page with "Download ZIP Backup" button
+     */
+    Route::get('email-manager/db-backup', [DbBackupDownloadController::class, 'index'])
+        ->name('email-manager.db-backup.index');
+
+    /**
+     * Generates SQL dump + ZIP and downloads immediately (no storing as records)
+     */
+    Route::post('email-manager/db-backup/download', [DbBackupDownloadController::class, 'download'])
+        ->name('email-manager.db-backup.download');
 });

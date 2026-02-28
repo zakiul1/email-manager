@@ -3,12 +3,17 @@
         <h1 class="text-lg font-semibold">Domain Unsubscribes</h1>
     </div>
 
+    @php
+        $disableAddForm = !empty($bulkIsRunning);
+    @endphp
+
     <div class="grid gap-4 md:grid-cols-2">
         {{-- Add Multiple --}}
         <flux:card>
             <flux:heading size="md">Add Domains / Extensions / Users</flux:heading>
 
-            <div class="mt-4 space-y-3">
+            {{-- ✅ IMPORTANT: disable the whole form safely --}}
+            <fieldset class="mt-4 space-y-3" @if ($disableAddForm) disabled @endif>
                 <flux:field>
                     <flux:label>Type</flux:label>
                     <select wire:model.live="type" class="w-full rounded-md border px-3 py-2 text-sm">
@@ -22,8 +27,7 @@
                 <flux:field>
                     <flux:label>Paste multiple (line break / comma / semicolon)</flux:label>
 
-                    <textarea wire:model="domainsText" rows="8" class="w-full rounded-md border px-3 py-2 text-sm"
-                        placeholder=""></textarea>
+                    <textarea wire:model="domainsText" rows="8" class="w-full rounded-md border px-3 py-2 text-sm" placeholder=""></textarea>
 
                     <flux:error name="domainsText" />
 
@@ -46,16 +50,142 @@
                     <flux:error name="reason" />
                 </flux:field>
 
+                {{-- Actions --}}
                 <div class="flex items-center gap-2">
-                    <flux:button wire:click="addMultiple" wire:loading.attr="disabled">
-                        Add
-                    </flux:button>
+                    @if ($disableAddForm)
+                        <flux:button disabled>Start</flux:button>
+                    @else
+                        <flux:button wire:click="startBulkAdd" wire:loading.attr="disabled">
+                            Start
+                        </flux:button>
+                    @endif
+
+                    {{-- Continue Chunk --}}
+                    @if (!empty($bulkUploadId) && !empty($bulkIsRunning))
+                        <flux:button wire:click="processChunk" wire:loading.attr="disabled"
+                            class="!bg-white !text-black !border">
+                            Process next chunk
+                        </flux:button>
+                    @endif
+
+                    {{-- Reset --}}
+                    @if (!empty($bulkUploadId))
+                        <button type="button" class="rounded-md border px-3 py-2 text-sm" wire:click="resetBulk"
+                            wire:loading.attr="disabled">
+                            Reset
+                        </button>
+                    @endif
 
                     <div class="text-xs text-muted-foreground" wire:loading>
                         Processing...
                     </div>
                 </div>
-            </div>
+            </fieldset>
+
+            {{-- Progress UI --}}
+            @if (!empty($bulkUploadId))
+                @php
+                    $total = (int) ($bulkTotal ?? 0);
+                    $processed = (int) ($bulkProcessed ?? 0);
+                    $percent = $total > 0 ? (int) round(($processed / $total) * 100) : 0;
+                    $percent = max(0, min(100, $percent));
+                @endphp
+
+                <div class="mt-4 space-y-2">
+                    <div class="flex items-center justify-between text-xs text-muted-foreground">
+                        <div>
+                            Status:
+                            @if (!empty($bulkIsDone))
+                                <span class="font-semibold text-foreground">Done</span>
+                            @elseif(!empty($bulkIsRunning))
+                                <span class="font-semibold text-foreground">Running</span>
+                            @else
+                                <span class="font-semibold text-foreground">Ready</span>
+                            @endif
+                        </div>
+                        <div class="font-semibold text-foreground">
+                            {{ $percent }}%
+                        </div>
+                    </div>
+
+                    <div class="h-2 w-full rounded bg-gray-200 overflow-hidden">
+                        <div class="h-2 bg-black/70" style="width: {{ $percent }}%"></div>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-2 text-xs">
+                        <div class="rounded border p-2">
+                            <div class="text-muted-foreground">Total</div>
+                            <div class="font-semibold">{{ number_format($bulkTotal ?? 0) }}</div>
+                        </div>
+                        <div class="rounded border p-2">
+                            <div class="text-muted-foreground">Processed</div>
+                            <div class="font-semibold">{{ number_format($bulkProcessed ?? 0) }}</div>
+                        </div>
+                        <div class="rounded border p-2">
+                            <div class="text-muted-foreground">Added</div>
+                            <div class="font-semibold">{{ number_format($bulkAdded ?? 0) }}</div>
+                        </div>
+                        <div class="rounded border p-2">
+                            <div class="text-muted-foreground">Updated</div>
+                            <div class="font-semibold">{{ number_format($bulkUpdated ?? 0) }}</div>
+                        </div>
+                        <div class="rounded border p-2 col-span-2">
+                            <div class="text-muted-foreground">Invalid</div>
+                            <div class="font-semibold">{{ number_format($bulkInvalid ?? 0) }}</div>
+                        </div>
+                    </div>
+
+                    {{-- Auto process chunks (polling) --}}
+                    @if (!empty($bulkIsRunning) && empty($bulkIsDone))
+                        <div class="text-xs text-muted-foreground">
+                            Auto-processing chunks...
+                        </div>
+                        <div wire:poll.750ms="processChunk"></div>
+                    @endif
+
+                    {{-- Failures preview + download --}}
+                    <div class="mt-3">
+                        <div class="flex items-center justify-between">
+                            <div class="text-sm font-medium">Failures (preview)</div>
+
+                            <button type="button" class="rounded-md border px-3 py-2 text-sm"
+                                wire:click="downloadBulkFailures" wire:loading.attr="disabled"
+                                @if (($bulkInvalid ?? 0) <= 0) disabled @endif>
+                                Download failures CSV
+                            </button>
+                        </div>
+
+                        <div class="mt-2 overflow-x-auto rounded border">
+                            <table class="min-w-full text-sm">
+                                <thead class="text-left">
+                                    <tr class="border-b">
+                                        <th class="px-3 py-2 font-medium">Value</th>
+                                        <th class="px-3 py-2 font-medium">Reason</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @forelse(($bulkFailurePreview ?? []) as $f)
+                                        <tr class="border-b">
+                                            <td class="px-3 py-2 font-medium">{{ $f['value'] ?? '' }}</td>
+                                            <td class="px-3 py-2 text-muted-foreground">{{ $f['reason'] ?? '' }}</td>
+                                        </tr>
+                                    @empty
+                                        <tr>
+                                            <td colspan="2" class="px-3 py-3 text-center text-muted-foreground">
+                                                No failures yet.
+                                            </td>
+                                        </tr>
+                                    @endforelse
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <div class="mt-1 text-xs text-muted-foreground">
+                            Preview shows up to 50 items. Download CSV to get full error list.
+                        </div>
+                    </div>
+                </div>
+            @endif
         </flux:card>
 
         {{-- Current List --}}
@@ -105,6 +235,15 @@
                         @forelse($items as $row)
                             @php
                                 $t = $row->type ?? '';
+
+                                $badgeClass = 'inline-flex items-center rounded-md border px-2 py-0.5 text-xs ';
+                                if ($t === 'domain') {
+                                    $badgeClass .= 'bg-blue-50 text-blue-700 border-blue-200';
+                                } elseif ($t === 'extension') {
+                                    $badgeClass .= 'bg-emerald-50 text-emerald-700 border-emerald-200';
+                                } else {
+                                    $badgeClass .= 'bg-amber-50 text-amber-700 border-amber-200';
+                                }
                             @endphp
                             <tr class="border-b">
                                 <td class="px-3 py-2">
@@ -112,12 +251,7 @@
                                 </td>
 
                                 <td class="px-3 py-2">
-                                    <span
-                                        class="inline-flex items-center rounded-md border px-2 py-0.5 text-xs
-                                        @if ($t === 'domain') bg-blue-50 text-blue-700 border-blue-200
-                                        @elseif($t === 'extension') bg-emerald-50 text-emerald-700 border-emerald-200
-                                        @else bg-amber-50 text-amber-700 border-amber-200 @endif
-                                    ">
+                                    <span class="{{ $badgeClass }}">
                                         {{ $row->type }}
                                     </span>
                                 </td>
@@ -200,8 +334,9 @@
                         Select all matched
                     </button>
 
-                    <button type="button" class="rounded-md border px-3 py-2 text-sm" wire:click="clearEmailSelection"
-                        wire:loading.attr="disabled" @if (empty($emailSelected)) disabled @endif>
+                    <button type="button" class="rounded-md border px-3 py-2 text-sm"
+                        wire:click="clearEmailSelection" wire:loading.attr="disabled"
+                        @if (empty($emailSelected)) disabled @endif>
                         Clear
                     </button>
 
@@ -231,11 +366,10 @@
                     <tbody>
                         @forelse($emailDomains as $row)
                             @php
-                                // keep your variable name $emailDomains for backward compatibility.
-                                // for user-mode, your Livewire should provide "local_part" (alias) on each row.
-                                $val = ($emailSearchMode ?? 'all') === 'user'
-                                    ? ($row->local_part ?? $row->domain ?? '')
-                                    : ($row->domain ?? '');
+                                $val =
+                                    ($emailSearchMode ?? 'all') === 'user'
+                                        ? $row->local_part ?? ($row->domain ?? '')
+                                        : $row->domain ?? '';
                             @endphp
                             <tr class="border-b">
                                 <td class="px-3 py-2">
