@@ -6,25 +6,32 @@
         {{-- Bulk actions --}}
         <div class="flex items-center gap-2">
             <div class="text-sm text-muted-foreground">
-                Selected:
-                <span class="font-semibold text-foreground">{{ count($selected ?? []) }}</span>
+             Selected:
+@if ($selectAllMatchedMode ?? false)
+    <span class="font-semibold text-foreground">
+        {{ number_format($matchedCount ?? 0) }} (All matched)
+    </span>
+@else
+    <span class="font-semibold text-foreground">{{ count($selected ?? []) }}</span>
+@endif
             </div>
 
+            {{-- Select all matched (across pages / current filters) --}}
             <button type="button" class="rounded-md border px-3 py-2 text-sm cursor-pointer"
-                wire:click="selectAllOnCurrentPage" wire:loading.attr="disabled"
+                wire:click="activateSelectAllMatched" wire:loading.attr="disabled"
                 @if (($emails->count() ?? 0) === 0) disabled @endif>
                 Select All
             </button>
 
             <button type="button" class="rounded-md border px-3 py-2 text-sm cursor-pointer"
                 wire:click="clearSelection" wire:loading.attr="disabled"
-                @if (empty($selected)) disabled @endif>
+                @if (empty($selected) && !($selectAllMatchedMode ?? false)) disabled @endif>
                 Clear
             </button>
 
             <button type="button" class="rounded-md border px-3 py-2 text-sm cursor-pointer"
                 wire:click="openBulkDeleteModal" wire:loading.attr="disabled"
-                @if (empty($selected)) disabled @endif>
+                @if (empty($selected) && !($selectAllMatchedMode ?? false)) disabled @endif>
                 Delete selected
             </button>
         </div>
@@ -111,10 +118,11 @@
                                         Copy
                                     </button>
 
+                                    {{-- ✅ Toggle Block/Unblock --}}
                                     <button class="rounded-md border px-2 py-1 text-xs"
                                         wire:click="rowSuppress({{ $e->id }})" wire:loading.attr="disabled"
-                                        title="Block email">
-                                        Block
+                                        title="{{ $isSupp ? 'Unblock email' : 'Block email' }}">
+                                        {{ $isSupp ? 'Unblock' : 'Block' }}
                                     </button>
 
                                     {{-- Confirm delete (opens modal) --}}

@@ -18,6 +18,9 @@ class Index extends Component
         'q' => ['except' => ''],
     ];
 
+    // ✅ total matched count (for Select All Matched mode)
+    public int $matchedCount = 0;
+
     // Filters
     public int $category_id = 0;    // 0 = All
     public string $q = '';          // search email
@@ -29,9 +32,20 @@ class Index extends Component
     public bool $showBulkDeleteModal = false;
     public int $bulkDeleteCount = 0;
 
-    // Selection
+    // Selection (explicit ids)
     public array $selected = [];            // selected email IDs (strings/ints)
     public bool $selectAllOnPage = false;   // header checkbox
+
+    /**
+     * Select all matched across ALL pages (by current filters)
+     * When true: we do not keep all ids in memory; delete uses the filtered query.
+     */
+    public bool $selectAllMatchedMode = false;
+
+    /**
+     * Internal flag to prevent hooks from cancelling selection mode during programmatic changes.
+     */
+    public bool $selectionInternalUpdate = false;
 
     /**
      * IDs for CURRENT PAGE (computed in render()).
@@ -58,18 +72,39 @@ class Index extends Component
 
     /**
      * Keep header checkbox in sync when selection changes manually.
-     * (Livewire calls updatedSelected($value) when selected changes.)
      */
     public function updatedSelected($value = null): void
     {
+        // If we changed selection internally, don't cancel modes.
+        if ($this->selectionInternalUpdate) {
+            $this->syncSelectAllOnPage();
+            return;
+        }
+
+        // User selection manually cancels "select all matched"
+        if ($this->selectAllMatchedMode) {
+            $this->selectAllMatchedMode = false;
+            $this->matchedCount = 0;
+        }
+
         $this->syncSelectAllOnPage();
     }
 
     /**
-     * Header checkbox toggled from UI.
+     * Header checkbox toggled from UI (select current page only).
      */
     public function updatedSelectAllOnPage($value): void
     {
+        if ($this->selectionInternalUpdate) {
+            return;
+        }
+
+        // Toggling current page selection cancels "select all matched"
+        if ($this->selectAllMatchedMode) {
+            $this->selectAllMatchedMode = false;
+            $this->matchedCount = 0;
+        }
+
         if ((bool) $value) {
             $this->selectAllOnCurrentPage();
         } else {
@@ -104,6 +139,28 @@ class Index extends Component
         return $query->orderByDesc('email_addresses.id');
     }
 
+    /**
+     * Base filter query for deletes (no eager loads, only EmailAddress table filters).
+     * Must match queryEmails() filters.
+     */
+    private function deleteBaseQuery(): Builder
+    {
+        $query = EmailAddress::query();
+
+        if ($this->category_id > 0) {
+            $query->whereHas('categories', function (Builder $q) {
+                $q->where('categories.id', $this->category_id);
+            });
+        }
+
+        $search = mb_strtolower(trim($this->q));
+        if ($search !== '') {
+            $query->where('email_addresses.email', 'like', '%' . $search . '%');
+        }
+
+        return $query;
+    }
+
     private function currentPageIds(): array
     {
         $ids = array_map('intval', $this->pageIds ?? []);
@@ -127,29 +184,69 @@ class Index extends Component
 
     public function clearSelection(): void
     {
+        $this->selectionInternalUpdate = true;
+
         $this->selected = [];
         $this->selectAllOnPage = false;
+        $this->selectAllMatchedMode = false;
+        $this->matchedCount = 0; // ✅ reset
+
+        $this->selectionInternalUpdate = false;
     }
 
     public function selectAllOnCurrentPage(): void
     {
+        $this->selectionInternalUpdate = true;
+
         $pageIds = $this->currentPageIds();
         $selected = $this->selectedIds();
 
         $this->selected = array_values(array_unique(array_merge($selected, $pageIds)));
         $this->selectAllOnPage = true;
+
+        $this->selectionInternalUpdate = false;
     }
 
     public function unselectAllOnCurrentPage(): void
     {
+        $this->selectionInternalUpdate = true;
+
         $pageIds = $this->currentPageIds();
         $selected = $this->selectedIds();
 
         $this->selected = array_values(array_diff($selected, $pageIds));
         $this->selectAllOnPage = false;
+
+        $this->selectionInternalUpdate = false;
     }
 
-    // ---------------- Row actions ----------------
+    /* ============================================================
+     |  Select all matched (across pages)
+     * ============================================================ */
+
+    public function activateSelectAllMatched(): void
+    {
+        $this->selectionInternalUpdate = true;
+
+        // Enable matched mode
+        $this->selectAllMatchedMode = true;
+
+        // Count ALL matched by current filters (for display)
+        $this->matchedCount = (int) $this->deleteBaseQuery()->count();
+
+        // Select current page so checkboxes look checked
+        $pageIds = $this->currentPageIds();
+        $this->selected = $pageIds;
+        $this->selectAllOnPage = true;
+
+        $this->selectionInternalUpdate = false;
+
+        $this->dispatch('toast', type: 'success', message: 'All matched emails selected.');
+    }
+
+    /* ============================================================
+     |  Row actions
+     * ============================================================ */
 
     public function rowCopy(int $emailId): void
     {
@@ -164,17 +261,35 @@ class Index extends Component
         $this->dispatch('toast', type: 'success', message: 'Email copied.');
     }
 
+    /**
+     * Toggle block/unblock for a single email.
+     */
     public function rowSuppress(int $emailId): void
     {
-        SuppressionEntry::firstOrCreate(
-            ['scope' => 'global', 'email_address_id' => $emailId],
-            ['reason' => 'Row action', 'user_id' => auth()->id()]
-        );
+        $existing = SuppressionEntry::query()
+            ->where('scope', 'global')
+            ->where('email_address_id', $emailId)
+            ->first();
+
+        if ($existing) {
+            $existing->delete();
+            $this->dispatch('toast', type: 'success', message: 'Email unblocked.');
+            return;
+        }
+
+        SuppressionEntry::create([
+            'scope' => 'global',
+            'email_address_id' => $emailId,
+            'reason' => 'Row action',
+            'user_id' => auth()->id(),
+        ]);
 
         $this->dispatch('toast', type: 'success', message: 'Email blocked (suppressed).');
     }
 
-    // ---------------- Delete confirm flow (single) ----------------
+    /* ============================================================
+     |  Delete confirm flow (single)
+     * ============================================================ */
 
     public function confirmDelete(int $emailId): void
     {
@@ -211,18 +326,31 @@ class Index extends Component
         $this->syncSelectAllOnPage();
     }
 
-    // ---------------- Bulk delete flow ----------------
+    /* ============================================================
+     |  Bulk delete flow
+     * ============================================================ */
 
     public function openBulkDeleteModal(): void
     {
-        $ids = $this->selectedIds();
+        // If select-all-matched mode, show count for whole filtered dataset
+        if ($this->selectAllMatchedMode) {
+            $this->bulkDeleteCount = (int) $this->deleteBaseQuery()->count();
+            if ($this->bulkDeleteCount <= 0) {
+                $this->dispatch('toast', type: 'error', message: 'No matched emails to delete.');
+                return;
+            }
+            $this->showBulkDeleteModal = true;
+            return;
+        }
 
+        // Otherwise, delete explicit selected ids
+        $ids = $this->selectedIds();
         if (empty($ids)) {
             $this->dispatch('toast', type: 'error', message: 'Select emails first.');
             return;
         }
 
-        $this->bulkDeleteCount = EmailAddress::query()
+        $this->bulkDeleteCount = (int) EmailAddress::query()
             ->whereIn('id', $ids)
             ->count();
 
@@ -241,22 +369,44 @@ class Index extends Component
             return;
         }
 
-        $ids = $this->selectedIds();
+        // Delete ALL matched by filters (safe chunks)
+        if ($this->selectAllMatchedMode) {
+            $deleted = 0;
 
+            $this->deleteBaseQuery()
+                ->select('email_addresses.id')
+                ->orderBy('email_addresses.id')
+                ->chunkById(5000, function ($rows) use (&$deleted) {
+                    $ids = $rows->pluck('id')->all();
+                    $deleted += EmailAddress::query()->whereIn('id', $ids)->delete();
+                });
+
+            $this->clearSelection();
+            $this->cancelBulkDelete();
+
+            $this->dispatch('toast', type: 'success', message: "Deleted {$deleted} email(s).");
+            $this->resetPage();
+            return;
+        }
+
+        // Delete explicit selected ids
+        $ids = $this->selectedIds();
         if (empty($ids)) {
             $this->dispatch('toast', type: 'error', message: 'No emails selected.');
             $this->cancelBulkDelete();
             return;
         }
 
-        $deleted = EmailAddress::query()
-            ->whereIn('id', $ids)
-            ->delete();
+        $deleted = 0;
+        foreach (array_chunk($ids, 1000) as $chunk) {
+            $deleted += EmailAddress::query()->whereIn('id', $chunk)->delete();
+        }
 
         $this->clearSelection();
         $this->cancelBulkDelete();
 
         $this->dispatch('toast', type: 'success', message: "Deleted {$deleted} email(s).");
+        $this->resetPage();
     }
 
     public function render()
@@ -270,7 +420,15 @@ class Index extends Component
             ->values()
             ->all();
 
-        $this->syncSelectAllOnPage();
+        // ✅ If Select-All-Matched mode is ON, keep current page checked
+        if ($this->selectAllMatchedMode) {
+            $this->selectionInternalUpdate = true;
+            $this->selected = $this->currentPageIds();
+            $this->selectAllOnPage = true;
+            $this->selectionInternalUpdate = false;
+        } else {
+            $this->syncSelectAllOnPage();
+        }
 
         return view('livewire.email-manager.emails.index', [
             'emails' => $emails,
