@@ -4,6 +4,7 @@ namespace App\Http\Controllers\EmailManager;
 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use ZipArchive;
@@ -15,8 +16,6 @@ class DbBackupDownloadController
 
     public function index()
     {
-        // ✅ For normal controller views, ->layout() does NOT work.
-        // The view must wrap itself in the component layout (layouts.app).
         return view('email-manager.db-backup.index');
     }
 
@@ -26,115 +25,168 @@ class DbBackupDownloadController
             '_token' => 'required',
         ]);
 
-        // If you want only admins, add your own check:
-        // abort_unless(auth()->user()?->is_admin, 403);
+        try {
+            // 1) Check Zip extension
+            if (!class_exists(ZipArchive::class)) {
+                return back()->with('error', 'ZIP extension is not enabled on the server (ZipArchive missing).');
+            }
 
-        $connection = config('database.default');
-        $driver = config("database.connections.$connection.driver");
+            $connection = config('database.default');
+            $driver = config("database.connections.$connection.driver");
 
-        if ($driver !== 'mysql') {
-            return back()->with('error', "Direct DB backup supports MySQL only. Current driver: {$driver}");
-        }
+            if ($driver !== 'mysql') {
+                return back()->with('error', "Direct DB backup supports MySQL only. Current driver: {$driver}");
+            }
 
-        Storage::disk($this->disk)->makeDirectory($this->tmpDir);
+            // 2) Ensure temp dir exists
+            Storage::disk($this->disk)->makeDirectory($this->tmpDir);
 
-        $dbName = (string) config("database.connections.$connection.database");
-        $stamp = now()->format('Y-m-d_His');
-        $baseName = Str::slug($dbName ?: 'database') . "_backup_{$stamp}";
+            $dbName = (string) config("database.connections.$connection.database");
+            $stamp = now()->format('Y-m-d_His');
+            $baseName = Str::slug($dbName ?: 'database') . "_backup_{$stamp}";
 
-        $sqlFile = "{$this->tmpDir}/{$baseName}.sql";
-        $zipFile = "{$this->tmpDir}/{$baseName}.zip";
+            $sqlFile = "{$this->tmpDir}/{$baseName}.sql";
+            $zipFile = "{$this->tmpDir}/{$baseName}.zip";
 
-        // Build SQL dump (in-memory)
-        $sql = $this->dumpMysqlDatabase();
+            // 3) Write SQL dump to file progressively (no big memory)
+            $sqlFullPath = Storage::disk($this->disk)->path($sqlFile);
+            $this->dumpMysqlDatabaseToFile($sqlFullPath);
 
-        // Save SQL to temp
-        Storage::disk($this->disk)->put($sqlFile, $sql);
+            // 4) Create ZIP
+            $zipFullPath = Storage::disk($this->disk)->path($zipFile);
 
-        // Create zip
-        $zipFullPath = Storage::disk($this->disk)->path($zipFile);
-        $sqlFullPath = Storage::disk($this->disk)->path($sqlFile);
+            $zip = new ZipArchive();
+            $opened = $zip->open($zipFullPath, ZipArchive::CREATE | ZipArchive::OVERWRITE);
 
-        $zip = new ZipArchive();
-        if ($zip->open($zipFullPath, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {
+            if ($opened !== true) {
+                // cleanup
+                Storage::disk($this->disk)->delete($sqlFile);
+                return back()->with('error', 'Could not create ZIP file. Check storage permissions.');
+            }
+
+            $zip->addFile($sqlFullPath, "{$baseName}.sql");
+            $zip->close();
+
+            // 5) Delete SQL after zip created
             Storage::disk($this->disk)->delete($sqlFile);
-            return back()->with('error', 'Could not create ZIP file.');
+
+            // 6) Download zip and delete after send
+            return response()->download($zipFullPath, "{$baseName}.zip")->deleteFileAfterSend(true);
+
+        } catch (\Throwable $e) {
+            Log::error('DB Backup download failed', [
+                'message' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            return back()->with('error', 'Backup failed: ' . $e->getMessage());
         }
-
-        $zip->addFile($sqlFullPath, "{$baseName}.sql");
-        $zip->close();
-
-        // Delete SQL (only zip remains)
-        Storage::disk($this->disk)->delete($sqlFile);
-
-        // Download zip and delete after sent
-        return response()->download($zipFullPath, "{$baseName}.zip")->deleteFileAfterSend(true);
     }
 
-    private function dumpMysqlDatabase(): string
+    /**
+     * Dump MySQL database to a file (streaming + chunked reads)
+     */
+    private function dumpMysqlDatabaseToFile(string $sqlFullPath): void
     {
-        $sql = '';
-        $sql .= "-- Laravel DB Backup\n";
-        $sql .= "-- Generated: " . now()->toDateTimeString() . "\n\n";
-        $sql .= "SET NAMES utf8mb4;\n";
-        $sql .= "SET FOREIGN_KEY_CHECKS=0;\n\n";
-
-        $tables = DB::select('SHOW TABLES');
-        if (empty($tables)) {
-            $sql .= "SET FOREIGN_KEY_CHECKS=1;\n";
-            return $sql;
+        $fh = fopen($sqlFullPath, 'w');
+        if (!$fh) {
+            throw new \RuntimeException("Cannot write SQL file: {$sqlFullPath}");
         }
 
-        $firstRow = (array) $tables[0];
-        $tableKey = array_key_first($firstRow);
+        try {
+            fwrite($fh, "-- Laravel DB Backup\n");
+            fwrite($fh, "-- Generated: " . now()->toDateTimeString() . "\n\n");
+            fwrite($fh, "SET NAMES utf8mb4;\n");
+            fwrite($fh, "SET FOREIGN_KEY_CHECKS=0;\n\n");
 
-        foreach ($tables as $row) {
-            $rowArr = (array) $row;
-            $table = $rowArr[$tableKey];
-
-            $sql .= "\n-- ----------------------------\n";
-            $sql .= "-- Table: `{$table}`\n";
-            $sql .= "-- ----------------------------\n\n";
-            $sql .= "DROP TABLE IF EXISTS `{$table}`;\n";
-
-            $create = DB::select("SHOW CREATE TABLE `{$table}`");
-            $createArr = (array) $create[0];
-            $createSql = $createArr['Create Table'] ?? array_values($createArr)[1] ?? '';
-            $sql .= $createSql . ";\n\n";
-
-            $rows = DB::table($table)->get();
-            if ($rows->isEmpty()) {
-                continue;
+            $tables = DB::select('SHOW TABLES');
+            if (empty($tables)) {
+                fwrite($fh, "SET FOREIGN_KEY_CHECKS=1;\n");
+                return;
             }
 
-            $columns = array_keys((array) $rows->first());
-            $colList = '`' . implode('`,`', $columns) . '`';
+            $firstRow = (array) $tables[0];
+            $tableKey = array_key_first($firstRow);
 
-            foreach ($rows as $r) {
-                $rArr = (array) $r;
-                $values = [];
+            foreach ($tables as $row) {
+                $rowArr = (array) $row;
+                $table = $rowArr[$tableKey];
 
-                foreach ($columns as $col) {
-                    $val = $rArr[$col];
+                fwrite($fh, "\n-- ----------------------------\n");
+                fwrite($fh, "-- Table: `{$table}`\n");
+                fwrite($fh, "-- ----------------------------\n\n");
+                fwrite($fh, "DROP TABLE IF EXISTS `{$table}`;\n");
 
-                    if (is_null($val)) {
-                        $values[] = 'NULL';
-                    } elseif (is_bool($val)) {
-                        $values[] = $val ? '1' : '0';
-                    } elseif (is_numeric($val)) {
-                        $values[] = (string) $val;
-                    } else {
-                        $values[] = DB::getPdo()->quote((string) $val);
-                    }
+                $create = DB::select("SHOW CREATE TABLE `{$table}`");
+                $createArr = (array) $create[0];
+                $createSql = $createArr['Create Table'] ?? array_values($createArr)[1] ?? '';
+                fwrite($fh, $createSql . ";\n\n");
+
+                // Chunked reads (avoid loading whole table into memory)
+                $this->dumpTableRowsChunked($fh, $table);
+            }
+
+            fwrite($fh, "\nSET FOREIGN_KEY_CHECKS=1;\n");
+        } finally {
+            fclose($fh);
+        }
+    }
+
+    private function dumpTableRowsChunked($fh, string $table): void
+    {
+        // Determine columns
+        $first = DB::table($table)->limit(1)->first();
+        if (!$first) {
+            return;
+        }
+
+        $columns = array_keys((array) $first);
+        $colList = '`' . implode('`,`', $columns) . '`';
+
+        // Use id if exists for stable chunking
+        $hasId = in_array('id', $columns, true);
+
+        if ($hasId) {
+            DB::table($table)->orderBy('id')->chunkById(500, function ($rows) use ($fh, $table, $columns, $colList) {
+                foreach ($rows as $r) {
+                    $vals = $this->rowToSqlValues((array) $r, $columns);
+                    fwrite($fh, "INSERT INTO `{$table}` ({$colList}) VALUES ({$vals});\n");
                 }
-
-                $sql .= "INSERT INTO `{$table}` ({$colList}) VALUES (" . implode(',', $values) . ");\n";
-            }
-
-            $sql .= "\n";
+            }, 'id');
+        } else {
+            // fallback: simple chunk (still safer than get all)
+            DB::table($table)->orderBy($columns[0])->chunk(500, function ($rows) use ($fh, $table, $columns, $colList) {
+                foreach ($rows as $r) {
+                    $vals = $this->rowToSqlValues((array) $r, $columns);
+                    fwrite($fh, "INSERT INTO `{$table}` ({$colList}) VALUES ({$vals});\n");
+                }
+            });
         }
 
-        $sql .= "\nSET FOREIGN_KEY_CHECKS=1;\n";
-        return $sql;
+        fwrite($fh, "\n");
+    }
+
+    private function rowToSqlValues(array $row, array $columns): string
+    {
+        $out = [];
+        $pdo = DB::getPdo();
+
+        foreach ($columns as $col) {
+            $val = $row[$col] ?? null;
+
+            if ($val === null) {
+                $out[] = 'NULL';
+            } elseif (is_bool($val)) {
+                $out[] = $val ? '1' : '0';
+            } elseif (is_numeric($val)) {
+                $out[] = (string) $val;
+            } else {
+                $out[] = $pdo->quote((string) $val);
+            }
+        }
+
+        return implode(',', $out);
     }
 }
