@@ -49,6 +49,10 @@
                     :current="request()->routeIs('email-manager.exports*')" wire:navigate>
                     Exports
                 </flux:sidebar.item>
+                <flux:sidebar.item :href="route('email-manager.name-filter')"
+    :current="request()->routeIs('email-manager.name-filter')" wire:navigate>
+    Filter
+</flux:sidebar.item>
 
                 {{-- ✅ NEW: Database Backup --}}
                 <flux:sidebar.item :href="route('email-manager.db-backup.index')"

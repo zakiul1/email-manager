@@ -18,6 +18,9 @@ use App\Livewire\EmailManager\Suppression\DomainList;
 
 use App\Livewire\EmailManager\Emails\Index as EmailsIndex;
 
+// ✅ Name Filter (NEW)
+use App\Livewire\EmailManager\NameFilter\Index as NameFilterIndex;
+
 // Exports (Direct)
 use App\Livewire\EmailManager\Exports\Create as ExportCreate;
 
@@ -65,6 +68,12 @@ Route::middleware(['auth', 'verified'])->group(function () {
 
     Route::get('email-manager/domain-unsubscribes', DomainList::class)
         ->name('email-manager.domain-unsubscribes');
+
+    // -------------------------
+    // ✅ Name Filter (NEW MENU)
+    // -------------------------
+    Route::get('email-manager/name-filter', NameFilterIndex::class)
+        ->name('email-manager.name-filter');
 
     // -------------------------
     // Emails
