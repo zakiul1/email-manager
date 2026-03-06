@@ -51,6 +51,11 @@
                     <input type="checkbox" wire:model.live="exclude_domain_unsubscribes">
                     Exclude domain unsubscribes
                 </label>
+
+                <label class="flex items-center gap-2 text-sm">
+                    <input type="checkbox" wire:model.live="shuffle_domains">
+                    Shuffle emails to avoid same-domain consecutive order
+                </label>
             </div>
 
             <div class="flex gap-2 items-center">

@@ -9,12 +9,12 @@ class ExportQueryService
 {
     public function build(array $filters): Builder
     {
-        $categoryId = (int)($filters['category_id'] ?? 0);
+        $categoryId = (int) ($filters['category_id'] ?? 0);
 
-        $domain = trim((string)($filters['domain'] ?? ''));
+        $domain = trim((string) ($filters['domain'] ?? ''));
         $domain = $domain !== '' ? mb_strtolower(ltrim($domain, '@')) : null;
 
-        $valid = (string)($filters['valid'] ?? 'all');
+        $valid = (string) ($filters['valid'] ?? 'all');
 
         $excludeGlobalSuppression = $this->toBool($filters['exclude_global_suppression'] ?? false);
         $excludeDomainUnsubscribes = $this->toBool($filters['exclude_domain_unsubscribes'] ?? false);
@@ -96,9 +96,16 @@ class ExportQueryService
     private function toBool(mixed $value): bool
     {
         // handles true/false, 1/0, "1"/"0", "true"/"false"
-        if (is_bool($value)) return $value;
-        if (is_int($value)) return $value === 1;
-        $v = mb_strtolower(trim((string)$value));
+        if (is_bool($value)) {
+            return $value;
+        }
+
+        if (is_int($value)) {
+            return $value === 1;
+        }
+
+        $v = mb_strtolower(trim((string) $value));
+
         return in_array($v, ['1', 'true', 'yes', 'on'], true);
     }
 }

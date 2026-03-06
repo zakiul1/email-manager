@@ -16,6 +16,9 @@ class Create extends Component
     public bool $exclude_global_suppression = true;
     public bool $exclude_domain_unsubscribes = true;
 
+    // New option: shuffle exported emails to avoid same-domain consecutive order
+    public bool $shuffle_domains = true;
+
     public function submit(): void
     {
         $this->validate([
@@ -25,6 +28,7 @@ class Create extends Component
             'valid' => 'required|in:all,valid,invalid',
             'exclude_global_suppression' => 'boolean',
             'exclude_domain_unsubscribes' => 'boolean',
+            'shuffle_domains' => 'boolean',
         ]);
 
         // clean domain
@@ -39,6 +43,7 @@ class Create extends Component
             'valid' => $this->valid,
             'exclude_global_suppression' => $this->exclude_global_suppression ? 1 : 0,
             'exclude_domain_unsubscribes' => $this->exclude_domain_unsubscribes ? 1 : 0,
+            'shuffle_domains' => $this->shuffle_domains ? 1 : 0,
         ];
 
         // Remove null values so URL is clean
