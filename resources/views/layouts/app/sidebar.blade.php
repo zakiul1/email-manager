@@ -49,12 +49,17 @@
                     :current="request()->routeIs('email-manager.exports*')" wire:navigate>
                     Exports
                 </flux:sidebar.item>
+
                 <flux:sidebar.item :href="route('email-manager.name-filter')"
-    :current="request()->routeIs('email-manager.name-filter')" wire:navigate>
-    Filter
+                    :current="request()->routeIs('email-manager.name-filter')" wire:navigate>
+                    Filter
+                </flux:sidebar.item>
+
+              <flux:sidebar.item :href="route('sendportal.workspace.dashboard')"
+    :current="request()->routeIs('sendportal.workspace.*')" wire:navigate>
+    SendPortal
 </flux:sidebar.item>
 
-                {{-- ✅ NEW: Database Backup --}}
                 <flux:sidebar.item :href="route('email-manager.db-backup.index')"
                     :current="request()->routeIs('email-manager.db-backup.*')" wire:navigate>
                     Database Backup
@@ -70,7 +75,6 @@
         <x-desktop-user-menu class="hidden lg:block" :name="auth()->user()->name" />
     </flux:sidebar>
 
-    <!-- Mobile User Menu -->
     <flux:header class="lg:hidden">
         <flux:sidebar.toggle class="lg:hidden" inset="left" />
 
@@ -116,12 +120,10 @@
 
     {{ $slot }}
 
-    {{-- ✅ Global Toast Container (top-right) --}}
     <div id="toast-container" class="fixed top-4 right-4 z-[9999] flex flex-col gap-2"></div>
 
     @fluxScripts
 
-    {{-- ✅ Global Toast Script (dispatch + session flash support) --}}
     <script>
         (function() {
             const container = document.getElementById('toast-container');
@@ -163,12 +165,10 @@
                 setTimeout(() => el.remove(), timeout);
             }
 
-            // Livewire dispatch event: $this->dispatch('toast', type: 'success', message: '...')
             window.addEventListener('toast', function(event) {
                 showToast(event.detail || {});
             });
 
-            // Show toast after redirect (session flash)
             const flash = @json(session('toast'));
             if (flash && flash.message) {
                 setTimeout(() => showToast(flash), 150);
