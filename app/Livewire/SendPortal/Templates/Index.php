@@ -15,6 +15,9 @@ class Index extends Component
     public string $search = '';
     public string $status = '';
 
+    public ?int $deleteId = null;
+    public ?string $deleteName = null;
+
     public function updatedSearch(): void
     {
         $this->resetPage();
@@ -30,8 +33,8 @@ class Index extends Component
         $template = Template::query()->findOrFail($templateId);
 
         $copy = $template->replicate();
-        $copy->name = $template->name.' Copy';
-        $copy->slug = Str::slug($copy->name.'-'.Str::random(6));
+        $copy->name = $template->name . ' Copy';
+        $copy->slug = Str::slug($copy->name . '-' . Str::random(6));
         $copy->status = 'draft';
         $copy->usage_count = 0;
         $copy->last_test_sent_at = null;
@@ -44,9 +47,24 @@ class Index extends Component
         $this->dispatch('toast', type: 'success', message: 'Template duplicated successfully.');
     }
 
-    public function deleteTemplate(int $templateId): void
+    public function confirmDelete(int $templateId, string $name): void
     {
-        $template = Template::query()->findOrFail($templateId);
+        $this->deleteId = $templateId;
+        $this->deleteName = $name;
+    }
+
+    public function cancelDelete(): void
+    {
+        $this->resetDeleteState();
+    }
+
+    public function deleteConfirmed(): void
+    {
+        if (! $this->deleteId) {
+            return;
+        }
+
+        $template = Template::query()->findOrFail($this->deleteId);
 
         app(ActivityLogService::class)->log('template.deleted', $template, [
             'name' => $template->name,
@@ -54,7 +72,16 @@ class Index extends Component
 
         $template->delete();
 
+        $this->resetDeleteState();
+
         $this->dispatch('toast', type: 'success', message: 'Template deleted successfully.');
+        $this->dispatch('close-modal', name: 'delete-template');
+    }
+
+    protected function resetDeleteState(): void
+    {
+        $this->deleteId = null;
+        $this->deleteName = null;
     }
 
     public function render()
@@ -63,9 +90,9 @@ class Index extends Component
             ->withCount('tests')
             ->when($this->search !== '', function ($query) {
                 $query->where(function ($inner) {
-                    $inner->where('name', 'like', '%'.$this->search.'%')
-                        ->orWhere('slug', 'like', '%'.$this->search.'%')
-                        ->orWhere('subject', 'like', '%'.$this->search.'%');
+                    $inner->where('name', 'like', '%' . $this->search . '%')
+                        ->orWhere('slug', 'like', '%' . $this->search . '%')
+                        ->orWhere('subject', 'like', '%' . $this->search . '%');
                 });
             })
             ->when($this->status !== '', function ($query) {

@@ -20,6 +20,7 @@ use App\Livewire\SendPortal\Templates\Form as TemplatesForm;
 use App\Livewire\SendPortal\Templates\Index as TemplatesIndex;
 use App\Livewire\SendPortal\Templates\Preview as TemplatesPreview;
 use App\Livewire\SendPortal\Templates\TestSend as TemplatesTestSend;
+use App\Livewire\SendPortal\Manual\Index as ManualIndex;
 use Illuminate\Support\Facades\Route;
 
 Route::middleware(config('sendportal-integration.middleware'))
@@ -55,6 +56,7 @@ Route::middleware(config('sendportal-integration.middleware'))
         Route::get('/reports', ReportsIndex::class)->name('reports.index');
         Route::get('/reports/campaigns/{campaign}', ReportsCampaignDetail::class)->name('reports.campaign-detail');
         Route::get('/reports/categories', ReportsCategoryPerformance::class)->name('reports.category-performance');
+        Route::get('/manual', ManualIndex::class)->name('manual.index');
 
         Route::get('/settings', SettingsForm::class)->name('settings.index');
     });

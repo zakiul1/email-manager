@@ -9,7 +9,7 @@
             <button
                 type="button"
                 wire:click="export"
-                class="rounded-2xl border border-emerald-300 px-4 py-2.5 text-sm font-medium text-emerald-700 dark:border-emerald-800 dark:text-emerald-300"
+                class="border border-emerald-300 px-4 py-2.5 text-sm font-medium text-emerald-700 dark:border-emerald-800 dark:text-emerald-300"
             >
                 Export CSV
             </button>
@@ -17,7 +17,7 @@
             <a
                 href="{{ route('sendportal.workspace.reports.index') }}"
                 wire:navigate
-                class="rounded-2xl border border-zinc-300 px-4 py-2.5 text-sm font-medium text-zinc-900 dark:border-zinc-700 dark:text-white"
+                class="border border-zinc-300 px-4 py-2.5 text-sm font-medium text-zinc-900 dark:border-zinc-700 dark:text-white"
             >
                 Back to Reports
             </a>
@@ -25,48 +25,48 @@
     </section>
 
     <section class="grid gap-4 md:grid-cols-4 xl:grid-cols-7">
-        <div class="rounded-3xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
+        <div class="border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
             <div class="text-xs uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Total</div>
             <div class="mt-2 text-2xl font-semibold text-zinc-950 dark:text-white">{{ number_format($stats['total']) }}</div>
         </div>
-        <div class="rounded-3xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
+        <div class="border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
             <div class="text-xs uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Sent</div>
             <div class="mt-2 text-2xl font-semibold text-emerald-600">{{ number_format($stats['sent']) }}</div>
         </div>
-        <div class="rounded-3xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
+        <div class="border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
             <div class="text-xs uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Failed</div>
             <div class="mt-2 text-2xl font-semibold text-red-600">{{ number_format($stats['failed']) }}</div>
         </div>
-        <div class="rounded-3xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
+        <div class="border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
             <div class="text-xs uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Pending / Queued</div>
             <div class="mt-2 text-2xl font-semibold text-amber-600">{{ number_format($stats['pending']) }}</div>
         </div>
-        <div class="rounded-3xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
+        <div class="border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
             <div class="text-xs uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Opened</div>
             <div class="mt-2 text-2xl font-semibold text-sky-600">{{ number_format($stats['opened']) }}</div>
         </div>
-        <div class="rounded-3xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
+        <div class="border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
             <div class="text-xs uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Clicked</div>
             <div class="mt-2 text-2xl font-semibold text-violet-600">{{ number_format($stats['clicked']) }}</div>
         </div>
-        <div class="rounded-3xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
+        <div class="border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
             <div class="text-xs uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Unsubscribed</div>
             <div class="mt-2 text-2xl font-semibold text-zinc-950 dark:text-white">{{ number_format($stats['unsubscribed']) }}</div>
         </div>
     </section>
 
-    <section class="rounded-3xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
+    <section class="border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
         <div class="flex flex-col gap-3 lg:flex-row">
             <input
                 type="text"
                 wire:model.live.debounce.300ms="search"
                 placeholder="Search recipient or failure reason..."
-                class="w-full rounded-2xl border border-zinc-300 bg-white px-4 py-2.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                class="w-full border border-zinc-300 bg-white px-4 py-2.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
             />
 
             <select
                 wire:model.live="status"
-                class="rounded-2xl border border-zinc-300 bg-white px-4 py-2.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                class="border border-zinc-300 bg-white px-4 py-2.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
             >
                 <option value="">All Status</option>
                 <option value="sent">Sent</option>
@@ -76,7 +76,7 @@
             </select>
         </div>
 
-        <div class="mt-6 overflow-hidden rounded-2xl border border-zinc-200 dark:border-zinc-700">
+        <div class="mt-6 overflow-hidden border border-zinc-200 dark:border-zinc-700">
             <div class="overflow-x-auto">
                 <table class="min-w-full divide-y divide-zinc-200 dark:divide-zinc-700">
                     <thead class="bg-zinc-50 dark:bg-zinc-800/60">

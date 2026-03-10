@@ -14,6 +14,9 @@ class Index extends Component
     public string $search = '';
     public string $status = '';
 
+    public ?int $deleteId = null;
+    public ?string $deleteName = null;
+
     public function updatedSearch(): void
     {
         $this->resetPage();
@@ -29,7 +32,7 @@ class Index extends Component
         $campaign = Campaign::query()->with('audiences')->findOrFail($campaignId);
 
         $copy = $campaign->replicate();
-        $copy->name = $campaign->name.' Copy';
+        $copy->name = $campaign->name . ' Copy';
         $copy->status = 'draft';
         $copy->delivery_mode = 'draft';
         $copy->scheduled_at = null;
@@ -55,9 +58,25 @@ class Index extends Component
         $this->dispatch('toast', type: 'success', message: 'Campaign duplicated successfully.');
     }
 
-    public function deleteCampaign(int $campaignId, ActivityLogService $activityLogService): void
+    public function confirmDelete(int $campaignId, string $name): void
     {
-        $campaign = Campaign::query()->findOrFail($campaignId);
+        $this->deleteId = $campaignId;
+        $this->deleteName = $name;
+    }
+
+    public function cancelDelete(): void
+    {
+        $this->deleteId = null;
+        $this->deleteName = null;
+    }
+
+    public function deleteConfirmed(ActivityLogService $activityLogService): void
+    {
+        if (! $this->deleteId) {
+            return;
+        }
+
+        $campaign = Campaign::query()->findOrFail($this->deleteId);
 
         $activityLogService->log('campaign.deleted', $campaign, [
             'name' => $campaign->name,
@@ -65,7 +84,16 @@ class Index extends Component
 
         $campaign->delete();
 
+        $this->resetDeleteState();
+
         $this->dispatch('toast', type: 'success', message: 'Campaign deleted successfully.');
+        $this->dispatch('close-modal', name: 'delete-campaign');
+    }
+
+    protected function resetDeleteState(): void
+    {
+        $this->deleteId = null;
+        $this->deleteName = null;
     }
 
     public function render()
@@ -75,8 +103,8 @@ class Index extends Component
             ->withCount(['messages', 'audiences'])
             ->when($this->search !== '', function ($query) {
                 $query->where(function ($inner) {
-                    $inner->where('name', 'like', '%'.$this->search.'%')
-                        ->orWhere('subject', 'like', '%'.$this->search.'%');
+                    $inner->where('name', 'like', '%' . $this->search . '%')
+                        ->orWhere('subject', 'like', '%' . $this->search . '%');
                 });
             })
             ->when($this->status !== '', function ($query) {

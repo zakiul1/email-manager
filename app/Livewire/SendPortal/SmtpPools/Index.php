@@ -12,6 +12,9 @@ class Index extends Component
 
     public string $search = '';
 
+    public ?int $deleteId = null;
+    public ?string $deleteName = null;
+
     public function updatedSearch(): void
     {
         $this->resetPage();
@@ -28,13 +31,37 @@ class Index extends Component
         $this->dispatch('toast', type: 'success', message: 'SMTP pool status updated.');
     }
 
-    public function deletePool(int $poolId): void
+    public function confirmDelete(int $poolId, string $name): void
     {
-        $pool = SmtpPool::query()->findOrFail($poolId);
+        $this->deleteId = $poolId;
+        $this->deleteName = $name;
+    }
+
+    public function cancelDelete(): void
+    {
+        $this->resetDeleteState();
+    }
+
+    public function deleteConfirmed(): void
+    {
+        if (! $this->deleteId) {
+            return;
+        }
+
+        $pool = SmtpPool::query()->findOrFail($this->deleteId);
 
         $pool->delete();
 
+        $this->resetDeleteState();
+
         $this->dispatch('toast', type: 'success', message: 'SMTP pool deleted.');
+        $this->dispatch('close-modal', name: 'delete-smtp-pool');
+    }
+
+    protected function resetDeleteState(): void
+    {
+        $this->deleteId = null;
+        $this->deleteName = null;
     }
 
     public function render()
@@ -42,7 +69,7 @@ class Index extends Component
         $pools = SmtpPool::query()
             ->withCount('accounts')
             ->when($this->search !== '', function ($query) {
-                $query->where('name', 'like', '%'.$this->search.'%');
+                $query->where('name', 'like', '%' . $this->search . '%');
             })
             ->latest('id')
             ->paginate(12);

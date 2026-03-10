@@ -29,10 +29,10 @@ class Form extends Component
     public string $reply_to_email = '';
     public string $html_content = '';
     public string $text_content = '';
-    public string $audience_type = 'category';
     public array $audience_ids = [];
     public ?string $scheduled_at = null;
     public string $notes = '';
+    public string $category_search = '';
 
     public function mount(?Campaign $campaign = null): void
     {
@@ -63,12 +63,12 @@ class Form extends Component
         $this->reply_to_email = (string) ($this->campaign->reply_to_email ?? '');
         $this->html_content = (string) ($this->campaign->html_content ?? '');
         $this->text_content = (string) ($this->campaign->text_content ?? '');
-        $this->audience_type = 'category';
         $this->scheduled_at = $this->campaign->scheduled_at?->format('Y-m-d\TH:i');
 
         $this->audience_ids = $this->campaign->audiences()
             ->pluck('source_id')
             ->map(fn ($id) => (string) $id)
+            ->values()
             ->all();
 
         $this->notes = (string) ($this->campaign->meta['notes'] ?? '');
@@ -92,8 +92,34 @@ class Form extends Component
         $this->text_content = $this->text_content !== '' ? $this->text_content : (string) ($template->text_content ?? '');
     }
 
+    public function toggleAudience(string|int $categoryId): void
+    {
+        $categoryId = (string) $categoryId;
+
+        if (in_array($categoryId, $this->audience_ids, true)) {
+            $this->audience_ids = array_values(array_filter(
+                $this->audience_ids,
+                fn ($id) => (string) $id !== $categoryId
+            ));
+
+            return;
+        }
+
+        $this->audience_ids[] = $categoryId;
+        $this->audience_ids = array_values(array_unique(array_map('strval', $this->audience_ids)));
+    }
+
     public function save(ActivityLogService $activityLogService): void
     {
+        $normalizedAudienceIds = collect($this->audience_ids)
+            ->filter(fn ($id) => $id !== null && $id !== '')
+            ->map(fn ($id) => (int) $id)
+            ->unique()
+            ->values()
+            ->all();
+
+        $this->audience_ids = array_map('strval', $normalizedAudienceIds);
+
         $validated = $this->validate([
             'name' => ['required', 'string', 'max:255'],
             'subject' => ['required', 'string', 'max:255'],
@@ -108,7 +134,6 @@ class Form extends Component
             'reply_to_email' => ['nullable', 'email', 'max:255'],
             'html_content' => ['nullable', 'string'],
             'text_content' => ['nullable', 'string'],
-            'audience_type' => ['required', Rule::in(['category'])],
             'audience_ids' => ['required', 'array', 'min:1'],
             'audience_ids.*' => ['required', 'integer', 'exists:categories,id'],
             'scheduled_at' => ['nullable', 'date'],
@@ -122,49 +147,31 @@ class Form extends Component
         }
 
         DB::transaction(function () use ($validated, $activityLogService) {
+            $payload = [
+                'name' => $validated['name'],
+                'subject' => $validated['subject'],
+                'preheader' => $validated['preheader'] ?: null,
+                'status' => $validated['status'],
+                'delivery_mode' => $validated['delivery_mode'],
+                'template_id' => $validated['template_id'],
+                'smtp_pool_id' => $validated['smtp_pool_id'],
+                'from_name' => $validated['from_name'] ?: null,
+                'from_email' => $validated['from_email'] ?: null,
+                'reply_to_name' => $validated['reply_to_name'] ?: null,
+                'reply_to_email' => $validated['reply_to_email'] ?: null,
+                'html_content' => $validated['html_content'] ?: null,
+                'text_content' => $validated['text_content'] ?: null,
+                'audience_type' => 'category',
+                'audience_reference' => implode(',', $validated['audience_ids']),
+                'scheduled_at' => $validated['scheduled_at'] ?: null,
+                'meta' => [
+                    'notes' => $validated['notes'] ?: null,
+                ],
+            ];
+
             $campaign = $this->campaign
-                ? tap($this->campaign)->update([
-                    'name' => $validated['name'],
-                    'subject' => $validated['subject'],
-                    'preheader' => $validated['preheader'] ?: null,
-                    'status' => $validated['status'],
-                    'delivery_mode' => $validated['delivery_mode'],
-                    'template_id' => $validated['template_id'],
-                    'smtp_pool_id' => $validated['smtp_pool_id'],
-                    'from_name' => $validated['from_name'] ?: null,
-                    'from_email' => $validated['from_email'] ?: null,
-                    'reply_to_name' => $validated['reply_to_name'] ?: null,
-                    'reply_to_email' => $validated['reply_to_email'] ?: null,
-                    'html_content' => $validated['html_content'] ?: null,
-                    'text_content' => $validated['text_content'] ?: null,
-                    'audience_type' => 'category',
-                    'audience_reference' => implode(',', $validated['audience_ids']),
-                    'scheduled_at' => $validated['scheduled_at'] ?: null,
-                    'meta' => [
-                        'notes' => $validated['notes'] ?: null,
-                    ],
-                ])
-                : Campaign::query()->create([
-                    'name' => $validated['name'],
-                    'subject' => $validated['subject'],
-                    'preheader' => $validated['preheader'] ?: null,
-                    'status' => $validated['status'],
-                    'delivery_mode' => $validated['delivery_mode'],
-                    'template_id' => $validated['template_id'],
-                    'smtp_pool_id' => $validated['smtp_pool_id'],
-                    'from_name' => $validated['from_name'] ?: null,
-                    'from_email' => $validated['from_email'] ?: null,
-                    'reply_to_name' => $validated['reply_to_name'] ?: null,
-                    'reply_to_email' => $validated['reply_to_email'] ?: null,
-                    'html_content' => $validated['html_content'] ?: null,
-                    'text_content' => $validated['text_content'] ?: null,
-                    'audience_type' => 'category',
-                    'audience_reference' => implode(',', $validated['audience_ids']),
-                    'scheduled_at' => $validated['scheduled_at'] ?: null,
-                    'meta' => [
-                        'notes' => $validated['notes'] ?: null,
-                    ],
-                ]);
+                ? tap($this->campaign)->update($payload)
+                : Campaign::query()->create($payload);
 
             CampaignAudience::query()
                 ->where('campaign_id', $campaign->id)
@@ -184,7 +191,7 @@ class Form extends Component
                 $campaign,
                 [
                     'name' => $campaign->name,
-                    'audience_type' => $campaign->audience_type,
+                    'audience_type' => 'category',
                     'audience_count' => count($validated['audience_ids']),
                 ]
             );
@@ -200,10 +207,17 @@ class Form extends Component
 
     public function render()
     {
+        $categories = Category::query()
+            ->when($this->category_search !== '', function ($query) {
+                $query->where('name', 'like', '%' . $this->category_search . '%');
+            })
+            ->orderBy('name')
+            ->get();
+
         return view('livewire.sendportal.campaigns.form', [
             'templates' => Template::query()->orderBy('name')->get(),
             'smtpPools' => SmtpPool::query()->where('is_active', true)->orderBy('name')->get(),
-            'categories' => Category::query()->orderBy('name')->get(),
+            'categories' => $categories,
         ])->layout(config('sendportal-integration.layout'));
     }
 }

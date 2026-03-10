@@ -4,13 +4,33 @@
 >
     <section>
         <div class="border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
-            <div class="mb-6">
-                <h1 class="text-2xl font-semibold tracking-tight text-zinc-950 dark:text-white">
-                    {{ $template?->exists ? 'Edit Template' : 'Create Template' }}
-                </h1>
-                <p class="mt-1 text-sm text-zinc-600 dark:text-zinc-300">
-                    Build a lightweight modern email template with placeholders, preheader, and preview-ready content.
-                </p>
+            <div class="mb-6 flex flex-col gap-4 border-b border-zinc-200 pb-4 dark:border-zinc-700 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                    <h1 class="text-2xl font-semibold tracking-tight text-zinc-950 dark:text-white">
+                        {{ $template?->exists ? 'Edit Template' : 'Create Template' }}
+                    </h1>
+                    <p class="mt-1 text-sm text-zinc-600 dark:text-zinc-300">
+                        Build a lightweight modern email template with placeholders, preheader, and preview-ready content.
+                    </p>
+                </div>
+
+                <div class="flex items-center gap-3">
+                    <a
+                        href="{{ route('sendportal.workspace.templates.index') }}"
+                        wire:navigate
+                        class="inline-flex items-center justify-center border border-zinc-300 px-4 py-2.5 text-sm font-medium text-zinc-900 transition hover:bg-zinc-50 dark:border-zinc-700 dark:text-white dark:hover:bg-zinc-800"
+                    >
+                        Back
+                    </a>
+
+                    <button
+                        type="submit"
+                        form="template-form"
+                        class="inline-flex items-center justify-center bg-zinc-900 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-zinc-700 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-200"
+                    >
+                        {{ $template?->exists ? 'Update Template' : 'Create Template' }}
+                    </button>
+                </div>
             </div>
 
             <div class="mb-6 border-b border-zinc-200 dark:border-zinc-700">
@@ -61,7 +81,7 @@
                 </nav>
             </div>
 
-            <form wire:submit="save" class="space-y-6">
+            <form id="template-form" wire:submit="save" class="space-y-6">
                 <div x-show="activeTab === 'template'" x-cloak class="space-y-6">
                     <div class="grid gap-6 md:grid-cols-2">
                         <div>

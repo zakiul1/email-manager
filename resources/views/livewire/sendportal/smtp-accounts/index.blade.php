@@ -83,16 +83,20 @@
                                         {{ $account->from_email ?: 'No from email' }}
                                     </div>
                                 </td>
+
                                 <td class="px-4 py-3 text-sm text-zinc-600 dark:text-zinc-300">
                                     {{ $account->provider_label ?: 'Custom SMTP' }}
                                 </td>
+
                                 <td class="px-4 py-3 text-sm text-zinc-600 dark:text-zinc-300">
                                     {{ $account->host ?: '—' }}@if($account->port) :{{ $account->port }} @endif
                                 </td>
+
                                 <td class="px-4 py-3 text-sm text-zinc-600 dark:text-zinc-300">
                                     <div>Daily: {{ $account->daily_limit ?: '—' }}</div>
                                     <div>Hourly: {{ $account->hourly_limit ?: '—' }}</div>
                                 </td>
+
                                 <td class="px-4 py-3">
                                     <span class="inline-flex px-3 py-1 text-xs font-medium
                                         @if($account->status->value === 'active') bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-200
@@ -102,6 +106,7 @@
                                         {{ ucfirst($account->status->value) }}
                                     </span>
                                 </td>
+
                                 <td class="px-4 py-3 text-sm text-zinc-600 dark:text-zinc-300">
                                     @if ($account->last_tested_at)
                                         <div>{{ $account->last_tested_at->diffForHumans() }}</div>
@@ -112,6 +117,7 @@
                                         —
                                     @endif
                                 </td>
+
                                 <td class="px-4 py-3">
                                     <div class="flex justify-end gap-2">
                                         <button
@@ -140,8 +146,8 @@
 
                                         <button
                                             type="button"
-                                            wire:click="deleteAccount({{ $account->id }})"
-                                            wire:confirm="Are you sure you want to delete this SMTP account?"
+                                            wire:click="confirmDelete({{ $account->id }}, {{ \Illuminate\Support\Js::from($account->name) }})"
+                                            x-on:click="$flux.modal('delete-smtp-account').show()"
                                             class="border border-red-300 px-3 py-2 text-xs font-medium text-red-700 hover:bg-red-50 dark:border-red-800 dark:text-red-300 dark:hover:bg-red-950"
                                         >
                                             Delete
@@ -163,4 +169,16 @@
             {{ $accounts->links() }}
         </div>
     </section>
+
+    @include('livewire.sendportal.partials.confirm-delete-modal', [
+        'modalName' => 'delete-smtp-account',
+        'title' => 'Delete SMTP Account',
+        'message' => 'Are you sure you want to delete this SMTP account?',
+        'itemName' => $deleteName ?? null,
+        'warning' => 'This action cannot be undone.',
+        'confirmAction' => 'deleteConfirmed',
+        'confirmTarget' => 'deleteConfirmed',
+        'confirmText' => 'Delete Account',
+        'loadingText' => 'Deleting...',
+    ])
 </div>

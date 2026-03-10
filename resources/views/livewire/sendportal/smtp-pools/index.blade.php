@@ -62,17 +62,21 @@
                                     <div class="text-sm font-medium text-zinc-900 dark:text-white">{{ $pool->name }}</div>
                                     <div class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{{ $pool->notes ?: 'No notes' }}</div>
                                 </td>
+
                                 <td class="px-4 py-3 text-sm text-zinc-600 dark:text-zinc-300">
                                     {{ str($pool->strategy->value)->replace('_', ' ')->title() }}
                                 </td>
+
                                 <td class="px-4 py-3 text-sm text-zinc-600 dark:text-zinc-300">
                                     {{ number_format($pool->accounts_count) }}
                                 </td>
+
                                 <td class="px-4 py-3">
                                     <span class="inline-flex px-3 py-1 text-xs font-medium {{ $pool->is_active ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-200' : 'bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-200' }}">
                                         {{ $pool->is_active ? 'Active' : 'Inactive' }}
                                     </span>
                                 </td>
+
                                 <td class="px-4 py-3">
                                     <div class="flex justify-end gap-2">
                                         <button
@@ -93,8 +97,8 @@
 
                                         <button
                                             type="button"
-                                            wire:click="deletePool({{ $pool->id }})"
-                                            wire:confirm="Are you sure you want to delete this SMTP pool?"
+                                            wire:click="confirmDelete({{ $pool->id }}, {{ \Illuminate\Support\Js::from($pool->name) }})"
+                                            x-on:click="$flux.modal('delete-smtp-pool').show()"
                                             class="border border-red-300 px-3 py-2 text-xs font-medium text-red-700 hover:bg-red-50 dark:border-red-800 dark:text-red-300 dark:hover:bg-red-950"
                                         >
                                             Delete
@@ -116,4 +120,16 @@
             {{ $pools->links() }}
         </div>
     </section>
+
+    @include('livewire.sendportal.partials.confirm-delete-modal', [
+        'modalName' => 'delete-smtp-pool',
+        'title' => 'Delete SMTP Pool',
+        'message' => 'Are you sure you want to delete this SMTP pool?',
+        'itemName' => $deleteName ?? null,
+        'warning' => 'This action cannot be undone.',
+        'confirmAction' => 'deleteConfirmed',
+        'confirmTarget' => 'deleteConfirmed',
+        'confirmText' => 'Delete Pool',
+        'loadingText' => 'Deleting...',
+    ])
 </div>

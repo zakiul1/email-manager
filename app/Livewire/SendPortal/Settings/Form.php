@@ -85,7 +85,7 @@ class Form extends Component
 
         $this->mail_mailer = (string) ($mail['mail_mailer'] ?? 'smtp');
         $this->mail_host = (string) ($mail['mail_host'] ?? '');
-        $this->mail_port = isset($mail['mail_port']) ? (int) $mail['mail_port'] : 587;
+        $this->mail_port = isset($mail['mail_port']) ? (int) ($mail['mail_port']) : 587;
         $this->mail_username = (string) ($mail['mail_username'] ?? '');
         $this->mail_password = '';
         $this->mail_encryption = (string) ($mail['mail_encryption'] ?? 'tls');
@@ -189,10 +189,7 @@ class Form extends Component
             $settingsService->putMany('mail', $mailPayload);
         }
 
-        session()->flash('toast', [
-            'type' => 'success',
-            'message' => 'SendPortal settings updated successfully.',
-        ]);
+        $this->dispatch('toast', type: 'success', message: 'SendPortal settings updated successfully.');
     }
 
     public function setTab(string $tab): void

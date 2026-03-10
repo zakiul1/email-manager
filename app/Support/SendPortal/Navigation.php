@@ -52,6 +52,11 @@ class Navigation
                 'route' => 'sendportal.workspace.settings.index',
                 'patterns' => ['sendportal.workspace.settings.*'],
             ],
+            [
+    'label' => 'Manual',
+    'route' => 'sendportal.workspace.manual.index',
+    'patterns' => ['sendportal.workspace.manual.*'],
+],
         ];
     }
 }

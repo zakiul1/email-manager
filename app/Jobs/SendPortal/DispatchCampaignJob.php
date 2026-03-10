@@ -25,6 +25,18 @@ class DispatchCampaignJob implements ShouldQueue
             return;
         }
 
+        if ($campaign->status === 'cancelled') {
+            return;
+        }
+
+        if ($campaign->status === 'paused') {
+            return;
+        }
+
+        if ($campaign->messages()->where('status', 'pending')->count() === 0) {
+            return;
+        }
+
         $campaign->update([
             'status' => 'active',
             'queued_at' => now(),
@@ -33,10 +45,18 @@ class DispatchCampaignJob implements ShouldQueue
         $campaign->messages()
             ->where('status', 'pending')
             ->orderBy('id')
-            ->chunk(200, function ($messages) {
+            ->chunk(200, function ($messages) use ($campaign) {
+                $campaign->refresh();
+
+                if (in_array($campaign->status, ['paused', 'cancelled'], true)) {
+                    return false;
+                }
+
                 foreach ($messages as $message) {
                     SendCampaignMessageJob::dispatch($message->id);
                 }
+
+                return true;
             });
     }
 }

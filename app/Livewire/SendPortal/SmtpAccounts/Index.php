@@ -15,6 +15,9 @@ class Index extends Component
     public string $search = '';
     public string $status = '';
 
+    public ?int $deleteId = null;
+    public ?string $deleteName = null;
+
     public function updatedSearch(): void
     {
         $this->resetPage();
@@ -42,9 +45,24 @@ class Index extends Component
         $this->dispatch('toast', type: 'success', message: 'SMTP account status updated.');
     }
 
-    public function deleteAccount(int $accountId): void
+    public function confirmDelete(int $accountId, string $name): void
     {
-        $account = SmtpAccount::query()->findOrFail($accountId);
+        $this->deleteId = $accountId;
+        $this->deleteName = $name;
+    }
+
+    public function cancelDelete(): void
+    {
+        $this->resetDeleteState();
+    }
+
+    public function deleteConfirmed(): void
+    {
+        if (! $this->deleteId) {
+            return;
+        }
+
+        $account = SmtpAccount::query()->findOrFail($this->deleteId);
 
         app(ActivityLogService::class)->log('smtp_account.deleted', $account, [
             'name' => $account->name,
@@ -52,7 +70,16 @@ class Index extends Component
 
         $account->delete();
 
+        $this->resetDeleteState();
+
         $this->dispatch('toast', type: 'success', message: 'SMTP account deleted.');
+        $this->dispatch('close-modal', name: 'delete-smtp-account');
+    }
+
+    protected function resetDeleteState(): void
+    {
+        $this->deleteId = null;
+        $this->deleteName = null;
     }
 
     public function testConnection(int $accountId, SmtpConnectionTestService $testService): void
@@ -78,10 +105,10 @@ class Index extends Component
         $accounts = SmtpAccount::query()
             ->when($this->search !== '', function ($query) {
                 $query->where(function ($inner) {
-                    $inner->where('name', 'like', '%'.$this->search.'%')
-                        ->orWhere('provider_label', 'like', '%'.$this->search.'%')
-                        ->orWhere('from_email', 'like', '%'.$this->search.'%')
-                        ->orWhere('host', 'like', '%'.$this->search.'%');
+                    $inner->where('name', 'like', '%' . $this->search . '%')
+                        ->orWhere('provider_label', 'like', '%' . $this->search . '%')
+                        ->orWhere('from_email', 'like', '%' . $this->search . '%')
+                        ->orWhere('host', 'like', '%' . $this->search . '%');
                 });
             })
             ->when($this->status !== '', function ($query) {

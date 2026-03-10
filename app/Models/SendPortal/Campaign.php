@@ -2,6 +2,7 @@
 
 namespace App\Models\SendPortal;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -69,5 +70,77 @@ class Campaign extends Model
     public function messages(): HasMany
     {
         return $this->hasMany(CampaignMessage::class, 'campaign_id');
+    }
+
+    public function isDraft(): bool
+    {
+        return $this->status === 'draft';
+    }
+
+    public function isScheduled(): bool
+    {
+        return $this->status === 'scheduled';
+    }
+
+    public function isActive(): bool
+    {
+        return $this->status === 'active';
+    }
+
+    public function isPaused(): bool
+    {
+        return $this->status === 'paused';
+    }
+
+    public function isCancelled(): bool
+    {
+        return $this->status === 'cancelled';
+    }
+
+    public function isCompleted(): bool
+    {
+        return $this->status === 'completed';
+    }
+
+    public function isFailed(): bool
+    {
+        return $this->status === 'failed';
+    }
+
+    public function canBeActivated(): bool
+    {
+        return ! $this->isCancelled() && $this->messages()->count() > 0;
+    }
+
+    public function canBePaused(): bool
+    {
+        return ! $this->isPaused() && ! $this->isCancelled();
+    }
+
+    public function canBeCancelled(): bool
+    {
+        return ! $this->isCancelled();
+    }
+
+    public function canDispatch(): bool
+    {
+        return ! $this->isPaused()
+            && ! $this->isCancelled()
+            && $this->messages()->where('status', 'pending')->exists();
+    }
+
+    public function canRetry(): bool
+    {
+        return ! $this->isPaused() && ! $this->isCancelled();
+    }
+
+    public function scopeDispatchable(Builder $query): Builder
+    {
+        return $query->whereNotIn('status', ['paused', 'cancelled']);
+    }
+
+    public function scopeRetryable(Builder $query): Builder
+    {
+        return $query->whereNotIn('status', ['paused', 'cancelled']);
     }
 }

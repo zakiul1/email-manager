@@ -55,11 +55,6 @@
                     Filter
                 </flux:sidebar.item>
 
-              <flux:sidebar.item :href="route('sendportal.workspace.dashboard')"
-    :current="request()->routeIs('sendportal.workspace.*')" wire:navigate>
-    SendPortal
-</flux:sidebar.item>
-
                 <flux:sidebar.item :href="route('email-manager.db-backup.index')"
                     :current="request()->routeIs('email-manager.db-backup.*')" wire:navigate>
                     Database Backup
@@ -69,8 +64,12 @@
 
         <flux:spacer />
 
-        <flux:sidebar.nav>
-        </flux:sidebar.nav>
+        <div class="px-3 pb-3">
+            <flux:sidebar.item :href="route('sendportal.workspace.dashboard')"
+                :current="request()->routeIs('sendportal.workspace.*')" wire:navigate>
+                SendPortal
+            </flux:sidebar.item>
+        </div>
 
         <x-desktop-user-menu class="hidden lg:block" :name="auth()->user()->name" />
     </flux:sidebar>
@@ -102,6 +101,14 @@
                 <flux:menu.radio.group>
                     <flux:menu.item :href="route('profile.edit')" wire:navigate>
                         {{ __('Settings') }}
+                    </flux:menu.item>
+                </flux:menu.radio.group>
+
+                <flux:menu.separator />
+
+                <flux:menu.radio.group>
+                    <flux:menu.item :href="route('sendportal.workspace.dashboard')" wire:navigate>
+                        SendPortal
                     </flux:menu.item>
                 </flux:menu.radio.group>
 

@@ -11,12 +11,12 @@ use App\Http\Controllers\SendPortal\PublicWebhookController;
 
 // keep name "home" because auth layout uses it
 Route::get('/', function () {
-    return redirect()->route('email-manager.dashboard');
+    return redirect()->route('sendportal.workspace.dashboard');
 })->name('home');
 
 // keep name "dashboard" because starter kit uses it
 Route::get('/dashboard', function () {
-    return redirect()->route('email-manager.dashboard');
+    return redirect()->route('sendportal.workspace.dashboard');
 })->middleware(['auth', 'verified'])->name('dashboard');
 
 // --------------------------------------

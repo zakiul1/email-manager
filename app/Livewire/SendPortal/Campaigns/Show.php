@@ -16,7 +16,7 @@ class Show extends Component
         abort_unless(auth()->user()?->can('update', $this->campaign), 403);
 
         $copy = $this->campaign->replicate();
-        $copy->name = $this->campaign->name.' Copy';
+        $copy->name = $this->campaign->name . ' Copy';
         $copy->status = 'draft';
         $copy->delivery_mode = 'draft';
         $copy->scheduled_at = null;
@@ -39,10 +39,7 @@ class Show extends Component
             'source_campaign_id' => $this->campaign->id,
         ]);
 
-        session()->flash('toast', [
-            'type' => 'success',
-            'message' => 'Campaign duplicated successfully.',
-        ]);
+        $this->dispatch('toast', type: 'success', message: 'Campaign duplicated successfully.');
 
         $this->redirectRoute('sendportal.workspace.campaigns.edit', ['campaign' => $copy->id], navigate: true);
     }
@@ -51,7 +48,29 @@ class Show extends Component
     {
         abort_unless(auth()->user()?->can('update', $this->campaign), 403);
 
-        if (! in_array($status, ['paused', 'cancelled', 'active'], true)) {
+        $allowedStatuses = ['paused', 'cancelled', 'active'];
+
+        if (! in_array($status, $allowedStatuses, true)) {
+            return;
+        }
+
+        $this->campaign->refresh();
+
+        if ($this->campaign->status === $status) {
+            $this->dispatch('toast', type: 'warning', message: 'Campaign is already in this status.');
+
+            return;
+        }
+
+        if ($this->campaign->status === 'cancelled') {
+            $this->dispatch('toast', type: 'warning', message: 'Cancelled campaigns cannot be changed.');
+
+            return;
+        }
+
+        if ($status === 'active' && $this->campaign->messages()->count() === 0) {
+            $this->dispatch('toast', type: 'error', message: 'Prepare audience messages before activating this campaign.');
+
             return;
         }
 
@@ -59,16 +78,39 @@ class Show extends Component
             'status' => $status,
         ]);
 
+        $this->campaign->refresh();
+
         $activityLogService->log('campaign.status_changed', $this->campaign, [
             'status' => $status,
         ]);
 
-        $this->dispatch('toast', type: 'success', message: 'Campaign status updated.');
+        $statusMessage = match ($status) {
+            'paused' => 'Campaign paused successfully.',
+            'cancelled' => 'Campaign cancelled successfully.',
+            'active' => 'Campaign activated successfully.',
+            default => 'Campaign status updated.',
+        };
+
+        $this->dispatch('toast', type: 'success', message: $statusMessage);
     }
 
     public function dispatchCampaign(ActivityLogService $activityLogService): void
     {
         abort_unless(auth()->user()?->can('dispatch', $this->campaign), 403);
+
+        $this->campaign->refresh();
+
+        if ($this->campaign->status === 'cancelled') {
+            $this->dispatch('toast', type: 'error', message: 'Cancelled campaigns cannot be dispatched.');
+
+            return;
+        }
+
+        if ($this->campaign->status === 'paused') {
+            $this->dispatch('toast', type: 'error', message: 'Paused campaigns cannot be dispatched.');
+
+            return;
+        }
 
         if ($this->campaign->messages()->count() === 0) {
             $this->dispatch('toast', type: 'error', message: 'Prepare audience messages before dispatching.');
