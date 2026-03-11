@@ -19,18 +19,18 @@ class SendCampaignMessageJob implements ShouldQueue
     public function handle(CampaignSendService $sendService): void
     {
         $message = CampaignMessage::query()
-            ->with('campaign')
+            ->with(['campaign', 'subscriber'])
             ->find($this->campaignMessageId);
 
-        if (! $message || $message->status !== 'pending') {
+        if (!$message || $message->status !== 'pending') {
             return;
         }
 
-        if (! $message->campaign) {
+        if (!$message->campaign) {
             return;
         }
 
-        if (in_array($message->campaign->status, ['paused', 'cancelled'], true)) {
+        if (in_array($message->campaign->status, ['paused', 'cancelled', 'completed'], true)) {
             return;
         }
 
@@ -40,8 +40,9 @@ class SendCampaignMessageJob implements ShouldQueue
         ]);
 
         $message->refresh();
+        $message->loadMissing(['campaign', 'subscriber']);
 
-        if (! $message->campaign || in_array($message->campaign->status, ['paused', 'cancelled'], true)) {
+        if (!$message->campaign || in_array($message->campaign->status, ['paused', 'cancelled', 'completed'], true)) {
             $message->update([
                 'status' => 'pending',
                 'queued_at' => null,
@@ -51,5 +52,25 @@ class SendCampaignMessageJob implements ShouldQueue
         }
 
         $sendService->sendMessage($message);
+
+        $message->refresh();
+        $message->loadMissing('campaign');
+
+        if (!$message->campaign) {
+            return;
+        }
+
+        $campaign = $message->campaign;
+
+        $hasRemainingMessages = $campaign->messages()
+            ->whereIn('status', ['pending', 'queued'])
+            ->exists();
+
+        if (!$hasRemainingMessages && !in_array($campaign->status, ['paused', 'cancelled', 'completed'], true)) {
+            $campaign->update([
+                'status' => 'completed',
+                'sent_at' => $campaign->sent_at ?: now(),
+            ]);
+        }
     }
 }

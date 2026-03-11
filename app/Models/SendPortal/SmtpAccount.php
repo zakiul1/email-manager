@@ -33,6 +33,7 @@ class SmtpAccount extends Model
         'last_tested_at',
         'last_test_status',
         'last_test_message',
+        'last_used_at',
         'failure_count',
         'success_count',
         'cooldown_until',
@@ -48,6 +49,7 @@ class SmtpAccount extends Model
         'priority' => 'integer',
         'is_default' => 'boolean',
         'last_tested_at' => 'datetime',
+        'last_used_at' => 'datetime',
         'cooldown_until' => 'datetime',
         'meta' => 'array',
         'status' => SmtpAccountStatus::class,
@@ -55,9 +57,16 @@ class SmtpAccount extends Model
 
     public function pools(): BelongsToMany
     {
-        return $this->belongsToMany(SmtpPool::class, 'sp_smtp_pool_accounts', 'smtp_account_id', 'smtp_pool_id')
-            ->withPivot(['weight', 'max_percent', 'is_active'])
-            ->withTimestamps();
+        return $this->belongsToMany(
+            SmtpPool::class,
+            'sp_smtp_pool_accounts',
+            'smtp_account_id',
+            'smtp_pool_id'
+        )->withPivot([
+                    'weight',
+                    'max_percent',
+                    'is_active',
+                ])->withTimestamps();
     }
 
     public function isActive(): bool

@@ -8,6 +8,7 @@ use App\Models\SendPortal\CampaignAudience;
 use App\Models\SendPortal\SmtpPool;
 use App\Models\SendPortal\Template;
 use App\Services\SendPortal\ActivityLogService;
+use App\Services\SendPortal\CampaignTestSendService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Livewire\Component;
@@ -33,6 +34,7 @@ class Form extends Component
     public ?string $scheduled_at = null;
     public string $notes = '';
     public string $category_search = '';
+    public string $test_recipient_email = '';
 
     public function mount(?Campaign $campaign = null): void
     {
@@ -46,7 +48,7 @@ class Form extends Component
             403
         );
 
-        if (! $this->campaign) {
+        if (!$this->campaign) {
             return;
         }
 
@@ -67,7 +69,7 @@ class Form extends Component
 
         $this->audience_ids = $this->campaign->audiences()
             ->pluck('source_id')
-            ->map(fn ($id) => (string) $id)
+            ->map(fn($id) => (string) $id)
             ->values()
             ->all();
 
@@ -76,13 +78,13 @@ class Form extends Component
 
     public function updatedTemplateId(): void
     {
-        if (! $this->template_id) {
+        if (!$this->template_id) {
             return;
         }
 
         $template = Template::query()->find($this->template_id);
 
-        if (! $template) {
+        if (!$template) {
             return;
         }
 
@@ -99,7 +101,7 @@ class Form extends Component
         if (in_array($categoryId, $this->audience_ids, true)) {
             $this->audience_ids = array_values(array_filter(
                 $this->audience_ids,
-                fn ($id) => (string) $id !== $categoryId
+                fn($id) => (string) $id !== $categoryId
             ));
 
             return;
@@ -111,9 +113,61 @@ class Form extends Component
 
     public function save(ActivityLogService $activityLogService): void
     {
+        $wasExisting = $this->campaign?->exists ?? false;
+
+        $this->saveCampaign($activityLogService);
+
+        session()->flash('toast', [
+            'type' => 'success',
+            'message' => $wasExisting ? 'Campaign updated successfully.' : 'Campaign created successfully.',
+        ]);
+
+        $this->redirectRoute('sendportal.workspace.campaigns.index', navigate: true);
+    }
+
+    public function sendTestMail(
+        CampaignTestSendService $campaignTestSendService,
+        ActivityLogService $activityLogService
+    ): void {
+        $this->resetErrorBag('test_recipient_email');
+
+        $this->validate([
+            'test_recipient_email' => ['required', 'email', 'max:255'],
+        ]);
+
+        if (!$this->campaign) {
+            $this->dispatch(
+                'toast',
+                type: 'error',
+                message: 'Please save the campaign before sending a test email.',
+                timeout: 5000
+            );
+
+            return;
+        }
+
+        $this->saveCampaign($activityLogService);
+
+        $this->campaign->refresh();
+
+        $result = $campaignTestSendService->sendTest(
+            $this->campaign,
+            $this->test_recipient_email
+        );
+
+        $this->dispatch(
+            'toast',
+            type: $result['ok'] ? 'success' : 'error',
+            message: $result['message'],
+            timeout: 5000
+        );
+    }
+
+    protected function saveCampaign(ActivityLogService $activityLogService): void
+    {
         $normalizedAudienceIds = collect($this->audience_ids)
-            ->filter(fn ($id) => $id !== null && $id !== '')
-            ->map(fn ($id) => (int) $id)
+            ->filter(fn($id) => $id !== null && $id !== '')
+            ->map(fn($id) => (int) $id)
             ->unique()
             ->values()
             ->all();
@@ -146,7 +200,7 @@ class Form extends Component
             return;
         }
 
-        DB::transaction(function () use ($validated, $activityLogService) {
+        $campaign = DB::transaction(function () use ($validated, $activityLogService) {
             $payload = [
                 'name' => $validated['name'],
                 'subject' => $validated['subject'],
@@ -169,9 +223,12 @@ class Form extends Component
                 ],
             ];
 
-            $campaign = $this->campaign
-                ? tap($this->campaign)->update($payload)
-                : Campaign::query()->create($payload);
+            if ($this->campaign) {
+                $this->campaign->update($payload);
+                $campaign = $this->campaign->fresh();
+            } else {
+                $campaign = Campaign::query()->create($payload);
+            }
 
             CampaignAudience::query()
                 ->where('campaign_id', $campaign->id)
@@ -195,14 +252,13 @@ class Form extends Component
                     'audience_count' => count($validated['audience_ids']),
                 ]
             );
+
+            return $campaign;
         });
 
-        session()->flash('toast', [
-            'type' => 'success',
-            'message' => $this->campaign ? 'Campaign updated successfully.' : 'Campaign created successfully.',
-        ]);
-
-        $this->redirectRoute('sendportal.workspace.campaigns.index', navigate: true);
+        $this->campaign = $campaign->fresh();
+        $this->status = (string) $this->campaign->status;
+        $this->delivery_mode = (string) $this->campaign->delivery_mode;
     }
 
     public function render()
