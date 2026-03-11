@@ -165,6 +165,7 @@ class Form extends Component
 
     protected function saveCampaign(ActivityLogService $activityLogService): void
     {
+        //coment
         $normalizedAudienceIds = collect($this->audience_ids)
             ->filter(fn($id) => $id !== null && $id !== '')
             ->map(fn($id) => (int) $id)
@@ -275,5 +276,6 @@ class Form extends Component
             'smtpPools' => SmtpPool::query()->where('is_active', true)->orderBy('name')->get(),
             'categories' => $categories,
         ])->layout(config('sendportal-integration.layout'));
+
     }
 }
